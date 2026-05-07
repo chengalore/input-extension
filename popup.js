@@ -90,6 +90,11 @@ function parseTabular(rawText, type) {
       measurements[field] = field === 'height' ? Math.min(...nums) : nums[0];
     }
 
+    // sleeve = half shoulder + sleeve_length (center back neck to sleeve edge)
+    if ('shoulder' in measurements && 'sleeve_length' in measurements) {
+      measurements.sleeve = measurements.shoulder / 2 + measurements.sleeve_length;
+    }
+
     const config = TYPE_CONFIG[type];
     const missing = config.required.filter(k => !(k in measurements));
     if (missing.length > 0) {
