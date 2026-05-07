@@ -18,8 +18,9 @@ const TYPE_CONFIG = {
  *   "SMALL : Dimensions: ..."
  */
 function splitLine(line) {
-  // Match label (no leading colon) then whitespace:whitespace then rest
-  const m = line.match(/^(.+?)\s+:\s+(.+)$/);
+  // Match label then optional-whitespace:whitespace then rest
+  // Handles "ONE SIZE : ...", "ONE SIZE\t:\t...", and "Approx.: ..."
+  const m = line.match(/^(.+?)\s*:\s+(.+)$/);
   if (!m) return null;
   return [m[1].trim(), m[2].trim()];
 }
@@ -30,6 +31,18 @@ function splitLine(line) {
  */
 function parseSegment(segment, type) {
   const result = {};
+
+  // "(W x ignored) x H x D [cm]" — e.g. "Approx.: (41 x 29) x 25 x 13 cm"
+  // Unanchored so it works with leading prefixes like "Approx.: "
+  const parenMatch = segment.match(/\(\s*([\d.]+)\s*[xX×]\s*[\d.]+\s*\)\s*[xX×]\s*([\d.]+)\s*[xX×]\s*([\d.]+)/i);
+  if (parenMatch) {
+    if (type === 'bag') {
+      result.width = parseFloat(parenMatch[1]);
+      result.height = parseFloat(parenMatch[2]);
+      result.depth = parseFloat(parenMatch[3]);
+    }
+    return result;
+  }
 
   // "Dimensions: H x W [cm]" — first = height, second = width
   const dimMatch = segment.match(/^dimensions?\s*:\s*([\d.]+)\s*[xX×]\s*([\d.]+)/i);
