@@ -7,16 +7,103 @@ const TYPE_CONFIG = {
     required: ['height', 'width'],
     optional: ['depth'],
   },
+  shirt: {
+    required: ['height', 'bust'],
+    optional: ['shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem', 'bicep'],
+  },
+  tShirt: {
+    required: ['height', 'bust'],
+    optional: ['shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem', 'bicep'],
+  },
+  jacket: {
+    required: ['height', 'bust'],
+    optional: ['shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem', 'bicep'],
+  },
+  coat: {
+    required: ['height', 'bust'],
+    optional: ['shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem', 'bicep'],
+  },
 };
 
-// ─── Parsing ─────────────────────────────────────────────────────────────────
+const TOPS_TYPES = new Set(['shirt', 'tShirt', 'jacket', 'coat']);
 
-/**
- * Split a raw line into [sizeLabel, measurementString].
- * Handles both tab-separated and space-separated colon delimiters:
- *   "ONE SIZE\t:\tDimensions: ..."
- *   "SMALL : Dimensions: ..."
- */
+// Column header (lowercase) → output field name
+const TOPS_COLUMN_MAP = {
+  'length':           'height',
+  'shoulder width':   'shoulder',
+  'shoulder':         'shoulder',
+  'body width':       'bust',
+  'chest width':      'bust',
+  'chest':            'bust',
+  'bust':             'bust',
+  'bust width':       'bust',
+  'sleeve length':    'sleeve_length',
+  'sleeve':           'sleeve',
+  'waist':            'waist',
+  'waist width':      'waist',
+  'hem':              'hem',
+  'hem width':        'hem',
+  'bicep':            'bicep',
+};
+
+// ─── Tabular parser (shirt / tShirt / jacket / coat) ─────────────────────────
+
+function extractNumbers(str) {
+  return [...str.matchAll(/[\d.]+/g)].map(m => parseFloat(m[0]));
+}
+
+function parseTabular(rawText, type) {
+  const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
+  if (lines.length < 2) {
+    return { sizes: {}, errors: ['Need at least a header row and one data row.'] };
+  }
+
+  const headers = lines[0].split('\t').map(h => h.trim().toLowerCase());
+  const sizeIdx = headers.findIndex(h => h === 'size');
+  if (sizeIdx === -1) {
+    return { sizes: {}, errors: ['No "size" column found in header row.'] };
+  }
+
+  // Map each column index to its output field name
+  const indexToField = {};
+  headers.forEach((h, i) => {
+    if (i === sizeIdx) return;
+    const field = TOPS_COLUMN_MAP[h];
+    if (field) indexToField[i] = field;
+  });
+
+  const sizes = {};
+  const errors = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const cols = lines[i].split('\t').map(c => c.trim());
+    const sizeLabel = cols[sizeIdx];
+    if (!sizeLabel) continue;
+
+    const measurements = {};
+    for (const [idxStr, field] of Object.entries(indexToField)) {
+      const cell = cols[Number(idxStr)] ?? '';
+      if (!cell) continue;
+      const nums = extractNumbers(cell);
+      if (nums.length === 0) continue;
+      // Height (length) uses the smallest value when two are given (e.g. "Before: 70 After: 73")
+      measurements[field] = field === 'height' ? Math.min(...nums) : nums[0];
+    }
+
+    const config = TYPE_CONFIG[type];
+    const missing = config.required.filter(k => !(k in measurements));
+    if (missing.length > 0) {
+      errors.push(`"${sizeLabel}" is missing required fields: ${missing.join(', ')}`);
+    }
+
+    sizes[sizeLabel] = measurements;
+  }
+
+  return { sizes, errors };
+}
+
+// ─── Single-line parser (bag) ─────────────────────────────────────────────────
+
 const QUALIFIER_LABEL = /^approx\.?$/i;
 
 function splitLine(line) {
@@ -29,10 +116,6 @@ function splitLine(line) {
   return [QUALIFIER_LABEL.test(label) ? 'ONE SIZE' : label, m[2].trim()];
 }
 
-/**
- * Parse a measurement segment like "Dimensions: 10.5 x 8.5 cm" or "Thickness: 2.5 cm"
- * Returns an object with any of: height, width, depth
- */
 function parseSegment(segment, type) {
   const result = {};
 
@@ -83,16 +166,7 @@ function parseSegment(segment, type) {
   return result;
 }
 
-function parseMeasurementString(measurementStr, type) {
-  const segments = measurementStr.split('/').map(s => s.trim());
-  let combined = {};
-  for (const seg of segments) {
-    Object.assign(combined, parseSegment(seg, type));
-  }
-  return combined;
-}
-
-function parse(rawText, type) {
+function parseSingleLine(rawText, type) {
   const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
   const sizes = {};
   const errors = [];
@@ -104,7 +178,11 @@ function parse(rawText, type) {
       continue;
     }
     const [label, measurementStr] = split;
-    const measurements = parseMeasurementString(measurementStr, type);
+    const segments = measurementStr.split('/').map(s => s.trim());
+    const measurements = {};
+    for (const seg of segments) {
+      Object.assign(measurements, parseSegment(seg, type));
+    }
 
     const config = TYPE_CONFIG[type];
     const missing = config.required.filter(k => !(k in measurements));
@@ -116,6 +194,15 @@ function parse(rawText, type) {
   }
 
   return { sizes, errors };
+}
+
+// ─── Main parse entry point ───────────────────────────────────────────────────
+
+function parse(rawText, type) {
+  if (TOPS_TYPES.has(type)) {
+    return parseTabular(rawText, type);
+  }
+  return parseSingleLine(rawText, type);
 }
 
 // ─── Formatting ───────────────────────────────────────────────────────────────
