@@ -35,9 +35,14 @@ const TYPE_CONFIG = {
     required: ['height', 'bust'],
     optional: ['shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem'],
   },
+  pants: {
+    required: ['inseam', 'waist', 'hip', 'thigh'],
+    optional: ['knee', 'legOpening', 'frontRise', 'backRise'],
+  },
 };
 
-const TOPS_TYPES = new Set(['shirt', 'tShirt', 'jacket', 'coat', 'dress', 'dressALine', 'tunicSleeve']);
+const TOPS_TYPES  = new Set(['shirt', 'tShirt', 'jacket', 'coat', 'dress', 'dressALine', 'tunicSleeve']);
+const PANTS_TYPES = new Set(['pants']);
 
 // Column header (lowercase) → output field name, for bags
 const BAG_COLUMN_MAP = {
@@ -69,10 +74,27 @@ const TOPS_COLUMN_MAP = {
   'bicep':            'bicep',
 };
 
+// Waist priority: relaxed > stretched > generic
+const WAIST_PRIORITY = ['waist$relaxed', 'waist$stretched', 'waist$other'];
+
+// Column header (lowercase) → output field name, for pants (tabular format)
+const PANTS_COLUMN_MAP = {
+  'waist':            'waist',
+  'waist relaxed':    'waist',
+  'hip':              'hip',
+  'thigh':            'thigh',
+  'inseam':           'inseam',
+  'knee':             'knee',
+  'leg opening':      'legOpening',
+  'leg bottom width': 'legOpening',
+  'front rise':       'frontRise',
+  'back rise':        'backRise',
+};
+
 // ─── Measurement normalization ────────────────────────────────────────────────
 
-// bust/waist/hem over 100 are full circumference — halve them
-const HALVE_FIELDS = new Set(['bust', 'waist', 'hem']);
+// Circumference fields over 100 are full measurements — halve them
+const HALVE_FIELDS = new Set(['bust', 'waist', 'hem', 'hip', 'thigh', 'knee', 'legOpening']);
 
 function normalizeMeasurements(measurements) {
   for (const field of HALVE_FIELDS) {
@@ -100,7 +122,9 @@ function parseTabular(rawText, type) {
     return { sizes: {}, errors: ['No "size" column found in header row.'] };
   }
 
-  const colMap = TOPS_TYPES.has(type) ? TOPS_COLUMN_MAP : BAG_COLUMN_MAP;
+  const colMap = TOPS_TYPES.has(type)  ? TOPS_COLUMN_MAP
+               : PANTS_TYPES.has(type) ? PANTS_COLUMN_MAP
+               : BAG_COLUMN_MAP;
 
   // Map each column index to its output field name
   const indexToField = {};
@@ -248,17 +272,53 @@ function parseSingleLine(rawText, type) {
 // Priority: HPS+CB > HPS > CB > CF > other
 const HEIGHT_PRIORITY = ['height$hps_cb', 'height$hps', 'height$full', 'height$cb', 'height$cf', 'height$other'];
 
-// Map description text → output field. Order matters: more specific first.
-function matchGradedField(desc) {
+// Map description + alt-description → output field. Order matters: specific first.
+function matchGradedField(desc, altDesc = '') {
   const d = desc.toLowerCase();
+  const a = altDesc.toLowerCase();
+
+  // Tops: sleeve
   if (/sleeve length from (shoulder|shoulder seam)/.test(d)) return 'sleeve_length';
   if (/sleeve length from (cb|centre back|center back)/.test(d)) return 'sleeve';
   if (/(across shoulder|shoulder across|shoulder width)/.test(d)) return 'shoulder';
   if (/(chest|bust)/.test(d) && !/pocket/.test(d)) return 'bust';
-  if (/waist/.test(d) && !/position/.test(d)) return 'waist';
-  if (/bottom width/.test(d) && !/sleeve/.test(d)) return 'hem';
   if (/(bicep|upper sleeve width)/.test(d)) return 'bicep';
-  // Height — tag by reference so we can resolve by priority later
+
+  // Waist — tagged for priority: relaxed > stretched > generic
+  // Exclude waistband, position measurements, and horizontal width measurements
+  if (/waist/.test(d) && !/band|position|pocket|horizontal/.test(d)) {
+    if (/relax/.test(d)) return 'waist$relaxed';
+    if (/stretch/.test(d)) return 'waist$stretched';
+    return 'waist$other';
+  }
+
+  // Pants circumferences — check before generic hem to avoid legOpening → hem
+  if (/\bhip\b/.test(d) && !/position/.test(d)) return 'hip';
+  if (/\bthigh\b/.test(d)) return 'thigh';
+  if (/\bknee\b/.test(d)) return 'knee';
+  if (/(leg\s*(bottom|opening))/.test(d)) return 'legOpening';
+
+  // Tops: hem (after leg check so "leg bottom width" doesn't match here)
+  if (/bottom width/.test(d) && !/sleeve/.test(d)) return 'hem';
+
+  // Pants lengths
+  if (/\boutseam\b/.test(d)) return null;
+  if (/\binseam\b/.test(d)) return 'inseam';
+
+  // Waistband height — stored internally, used to adjust rise if needed
+  if (/waistband/.test(d) && /height/.test(d)) return '_waistband';
+
+  // Front/back rise — tag by whether waistband is included
+  if (/front\s*rise/.test(d)) {
+    const inclWB = /incl\.?\s*wb|incl\.?\s*waist.?band/.test(a) || /incl\.?\s*wb/.test(d);
+    return inclWB ? 'frontRise$incl' : 'frontRise$excl';
+  }
+  if (/back\s*rise/.test(d)) {
+    const inclWB = /incl\.?\s*wb|incl\.?\s*waist.?band/.test(a) || /incl\.?\s*wb/.test(d);
+    return inclWB ? 'backRise$incl' : 'backRise$excl';
+  }
+
+  // Height — tag by reference for priority resolution
   if (/length/.test(d)) {
     const hasHps = /from (hps|highest point shoulder)/.test(d);
     const hasCb  = /(cb|centre back|center back|\bback\b)/.test(d);
@@ -269,8 +329,11 @@ function matchGradedField(desc) {
     if (hasCf)           return 'height$cf';
     if (/(full|body|total) length/.test(d)) return 'height$full';
   }
+
   return null;
 }
+
+const RISE_TAGS = ['frontRise$incl', 'frontRise$excl', 'backRise$incl', 'backRise$excl'];
 
 function parseGraded(rawText, type) {
   const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
@@ -278,11 +341,14 @@ function parseGraded(rawText, type) {
 
   const headers = lines[0].split('\t').map(h => h.trim());
 
-  // Find the description column ("Description" or "POM Name"), fallback to index 1
+  // Find description column ("Description" or "POM Name"), fallback to index 1
   const descIdx = (() => {
     const i = headers.findIndex(h => /^description$/i.test(h) || /^pom\s*name$/i.test(h));
     return i !== -1 ? i : 1;
   })();
+
+  // Find alt-description column ("Description (Alt)" etc.) for incl./excl. WB annotations
+  const descAltIdx = headers.findIndex(h => /description.*(alt|\(alt\))/i.test(h));
 
   // Size columns = headers that are plain integers (32, 34, 42, 44, …)
   const sizeCols = headers.reduce((acc, h, i) => {
@@ -292,14 +358,14 @@ function parseGraded(rawText, type) {
 
   if (sizeCols.length === 0) return { sizes: {}, errors: ['No size columns (numeric headers) found.'] };
 
-  // Initialise empty measurements for each size
   const sizes = {};
   for (const { size } of sizeCols) sizes[size] = {};
 
   for (let r = 1; r < lines.length; r++) {
     const cols = lines[r].split('\t').map(c => c.trim());
-    const desc = cols[descIdx] ?? '';
-    const field = matchGradedField(desc);
+    const desc    = cols[descIdx] ?? '';
+    const altDesc = descAltIdx >= 0 ? (cols[descAltIdx] ?? '') : '';
+    const field = matchGradedField(desc, altDesc);
     if (!field) continue;
 
     for (const { i, size } of sizeCols) {
@@ -312,11 +378,31 @@ function parseGraded(rawText, type) {
 
   for (const m of Object.values(sizes)) {
     normalizeMeasurements(m);
-    // Resolve height: pick highest-priority tagged variant available
+
+    // Resolve waist: relaxed > stretched > generic, halve if full circumference
+    for (const key of WAIST_PRIORITY) {
+      if (key in m) {
+        m.waist = m[key] > 100 ? m[key] / 2 : m[key];
+        break;
+      }
+    }
+    for (const key of WAIST_PRIORITY) delete m[key];
+
+    // Resolve front/back rise — add waistband height when measurement excludes it
+    const wb = m._waistband ?? 0;
+    delete m._waistband;
+    if ('frontRise$incl' in m) m.frontRise = m['frontRise$incl'];
+    else if ('frontRise$excl' in m) m.frontRise = m['frontRise$excl'] + wb;
+    if ('backRise$incl' in m)  m.backRise  = m['backRise$incl'];
+    else if ('backRise$excl' in m)  m.backRise  = m['backRise$excl'] + wb;
+    for (const key of RISE_TAGS) delete m[key];
+
+    // Resolve height: pick highest-priority tagged variant
     for (const key of HEIGHT_PRIORITY) {
       if (key in m) { m.height = m[key]; break; }
     }
     for (const key of HEIGHT_PRIORITY) delete m[key];
+
     // Compute sleeve when not directly measured
     if ('shoulder' in m && 'sleeve_length' in m && !('sleeve' in m)) {
       m.sleeve = m.shoulder / 2 + m.sleeve_length;
@@ -340,7 +426,7 @@ function isTabularFormat(rawText) {
 
 function parse(rawText, type) {
   if (isGradedFormat(rawText)) return parseGraded(rawText, type);
-  if (TOPS_TYPES.has(type) || isTabularFormat(rawText)) return parseTabular(rawText, type);
+  if (TOPS_TYPES.has(type) || PANTS_TYPES.has(type) || isTabularFormat(rawText)) return parseTabular(rawText, type);
   return parseSingleLine(rawText, type);
 }
 
