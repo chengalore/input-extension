@@ -23,13 +23,18 @@ const TYPE_CONFIG = {
     required: ['height', 'bust'],
     optional: ['shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem', 'bicep'],
   },
+  dress: {
+    required: ['height', 'bust'],
+    optional: ['shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem'],
+  },
 };
 
-const TOPS_TYPES = new Set(['shirt', 'tShirt', 'jacket', 'coat']);
+const TOPS_TYPES = new Set(['shirt', 'tShirt', 'jacket', 'coat', 'dress']);
 
 // Column header (lowercase) → output field name
 const TOPS_COLUMN_MAP = {
   'length':           'height',
+  'total length':     'height',
   'shoulder width':   'shoulder',
   'shoulder':         'shoulder',
   'body width':       'bust',
@@ -86,8 +91,9 @@ function parseTabular(rawText, type) {
       if (!cell) continue;
       const nums = extractNumbers(cell);
       if (nums.length === 0) continue;
-      // Height (length) uses the smallest value when two are given (e.g. "Before: 70 After: 73")
-      measurements[field] = field === 'height' ? Math.min(...nums) : nums[0];
+      // Always use the first number — covers "Dress: 122 Inner camisole: 83" → 122
+      // and "Before: 70 After: 73" → 70 (first is also the smaller one for shirts)
+      measurements[field] = nums[0];
     }
 
     // sleeve = half shoulder + sleeve_length (center back neck to sleeve edge)
