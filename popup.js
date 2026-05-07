@@ -325,7 +325,8 @@ const HEIGHT_PRIORITY = ['height$hps_cb', 'height$hps', 'height$full', 'height$c
 
 // Map description + alt-description → output field. Order matters: specific first.
 function matchGradedField(desc, altDesc = '', type = '') {
-  const d = desc.toLowerCase();
+  // Strip leading "½" or "1/2" prefix — these spec sheets store pre-halved values
+  const d = desc.toLowerCase().replace(/^(?:½|1\/2)\s*/, '');
   const a = altDesc.toLowerCase();
 
   // Raglan sleeve — before standard sleeve checks
@@ -494,7 +495,7 @@ function parseGraded(rawText, type, takeHalf) {
     if (!field) continue;
 
     for (const { i, size } of sizeCols) {
-      const val = parseFloat(cols[i]);
+      const val = parseFloat((cols[i] ?? '').replace(',', '.'));
       if (!isNaN(val) && !(field in sizes[size])) {
         sizes[size][field] = val;
       }
