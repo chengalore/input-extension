@@ -102,6 +102,28 @@ const PANTS_COLUMN_MAP = {
 // Fields eligible for "take half" — stores original as {field}_round
 const HALVE_FIELDS = new Set(['bust', 'waist', 'hem', 'hip', 'thigh', 'knee', 'legOpening']);
 
+const FIELD_DISPLAY_NAMES = {
+  height: 'Length', bust: 'Bust', shoulder: 'Shoulder',
+  sleeve_length: 'Sleeve length', sleeve: 'Sleeve',
+  waist: 'Waist', hem: 'Hem', bicep: 'Bicep',
+  inseam: 'Inseam', hip: 'Hip', thigh: 'Thigh',
+  knee: 'Knee', legOpening: 'Ankle opening',
+  frontRise: 'Front rise', backRise: 'Back rise',
+  width: 'Width', depth: 'Depth',
+};
+
+const TABLE_FIELD_ORDER = {
+  bag:         ['height', 'width', 'depth'],
+  shirt:       ['height', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem', 'bicep'],
+  tShirt:      ['height', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem', 'bicep'],
+  jacket:      ['height', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem', 'bicep'],
+  coat:        ['height', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem', 'bicep'],
+  dress:       ['height', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem'],
+  dressALine:  ['height', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem'],
+  tunicSleeve: ['height', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem'],
+  pants:       ['inseam', 'waist', 'hip', 'thigh', 'knee', 'legOpening', 'frontRise', 'backRise'],
+};
+
 function normalizeMeasurements(measurements, takeHalf) {
   if (!takeHalf) return;
   for (const field of HALVE_FIELDS) {
@@ -278,7 +300,7 @@ function parseSingleLine(rawText, type, takeHalf) {
 const HEIGHT_PRIORITY = ['height$hps_cb', 'height$hps', 'height$full', 'height$cb', 'height$cf', 'height$other'];
 
 // Map description + alt-description → output field. Order matters: specific first.
-function matchGradedField(desc, altDesc = '') {
+function matchGradedField(desc, altDesc = '', type = '') {
   const d = desc.toLowerCase();
   const a = altDesc.toLowerCase();
 
@@ -294,11 +316,11 @@ function matchGradedField(desc, altDesc = '') {
   if (/(chest|bust)/.test(d) && !/pocket/.test(d)) return 'bust';
   if (/(bicep|upper sleeve width)/.test(d)) return 'bicep';
 
-  // Hip — checked BEFORE waist because descriptions like "High Hip @ below waist edge"
-  // contain "waist" as a reference point and would otherwise match waist
-  if (/\bhip\b/.test(d) && !/position/.test(d)) {
+  // Hip (and seat as synonym) — checked BEFORE waist because descriptions like
+  // "High Hip @ below waist edge" contain "waist" as a reference point
+  if (/(\bhip\b|\bseat\b)/.test(d) && !/position/.test(d)) {
     if (/\blow\b/.test(d)) return 'hip$low';
-    return 'hip$high';  // high hip or unspecified — lower priority
+    return 'hip$high';
   }
 
   // Waist — tagged for priority: relaxed > stretched > generic
@@ -314,12 +336,18 @@ function matchGradedField(desc, altDesc = '') {
   if (/\bknee\b/.test(d)) return 'knee';
   if (/(leg\s*(bottom|opening))/.test(d)) return 'legOpening';
 
-  // Tops: hem (after leg check so "leg bottom width" doesn't match here)
-  if (/bottom width/.test(d) && !/sleeve/.test(d)) return 'hem';
+  // Bottom width — leg opening for pants, hem for tops
+  if (/bottom width/.test(d) && !/sleeve/.test(d)) {
+    return PANTS_TYPES.has(type) ? 'legOpening' : 'hem';
+  }
 
   // Pants lengths
   if (/\boutseam\b/.test(d)) return null;
-  if (/\b(inseam|inleg)\b/.test(d)) return 'inseam';
+  if (/\b(inseam|inleg)\b/.test(d)) {
+    // Tag with the inch length when present (e.g. "Inseam 28"" → _inseamLen_28)
+    const lenMatch = d.match(/(\d+)/);
+    return lenMatch ? `_inseamLen_${lenMatch[1]}` : 'inseam';
+  }
 
   // Waistband height/depth — stored internally, used to adjust rise if needed
   if (/waistband/.test(d) && /(height|depth)/.test(d)) return '_waistband';
@@ -330,7 +358,7 @@ function matchGradedField(desc, altDesc = '') {
                 || /incl\.?\s*wb|from waist edge/.test(d);
     return inclWB ? 'frontRise$incl' : 'frontRise$excl';
   }
-  if (/back\s*rise/.test(d)) {
+  if (/back.?rise/.test(d)) {
     const inclWB = /incl\.?\s*wb|incl\.?\s*waist.?band|from waist edge/.test(a)
                 || /incl\.?\s*wb|from waist edge/.test(d);
     return inclWB ? 'backRise$incl' : 'backRise$excl';
@@ -366,26 +394,66 @@ function computeSleeve(m) {
   delete m._neckWidth;
 }
 
+function expandInseamCombinations(sizes) {
+  const inseamKeys = new Set();
+  for (const m of Object.values(sizes)) {
+    for (const k of Object.keys(m)) {
+      if (k.startsWith('_inseamLen_')) inseamKeys.add(k);
+    }
+  }
+  if (inseamKeys.size === 0) return sizes;
+
+  // Sort inseam lengths numerically (28, 30, 32, …)
+  const inseamLens = [...inseamKeys].sort((a, b) => parseInt(a.slice(11)) - parseInt(b.slice(11)));
+
+  const expanded = {};
+  for (const [waist, m] of Object.entries(sizes)) {
+    for (const lenKey of inseamLens) {
+      if (!(lenKey in m)) continue;
+      const comboKey = `${waist}/${lenKey.slice(11)}`;
+      const combo = {};
+      for (const [k, v] of Object.entries(m)) {
+        if (!k.startsWith('_inseamLen_')) combo[k] = v;
+      }
+      combo.inseam = m[lenKey];
+      expanded[comboKey] = combo;
+    }
+  }
+  return expanded;
+}
+
 function parseGraded(rawText, type, takeHalf) {
   const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
   if (lines.length < 2) return { sizes: {}, errors: ['Need header + data rows.'] };
 
-  const headers = lines[0].split('\t').map(h => h.trim());
+  // Skip title rows — find the first line that looks like a spec header
+  let headerLineIdx = 0;
+  for (let i = 0; i < Math.min(3, lines.length); i++) {
+    const cols = lines[i].split('\t').map(h => h.trim());
+    if (cols.some(h => /^[Ww]?\d+$/.test(h) || /^(description|pom|measuring|point\s*of\s*measure|code|dim|ref)/i.test(h))) {
+      headerLineIdx = i;
+      break;
+    }
+  }
+  const headers = lines[headerLineIdx].split('\t').map(h => h.trim());
+  const dataStartIdx = headerLineIdx + 1;
 
-  // Find description column ("Description", "POM Name", "Measuring Point"), fallback to index 1
+  // Find description column, fallback to index 1
   const descIdx = (() => {
     const i = headers.findIndex(h =>
-      /^description$/i.test(h) || /^pom\s*name$/i.test(h) || /^measuring\s*point$/i.test(h)
+      /^description$/i.test(h) || /^pom\s*name$/i.test(h) ||
+      /^measuring\s*point$/i.test(h) || /^point\s*of\s*measure$/i.test(h)
     );
     return i !== -1 ? i : 1;
   })();
 
-  // Find alt-description column ("Description (Alt)" etc.) for incl./excl. WB annotations
+  // Find alt-description column for incl./excl. WB annotations
   const descAltIdx = headers.findIndex(h => /description.*(alt|\(alt\))/i.test(h));
 
-  // Size columns = headers that are plain integers (32, 34, 42, 44, …)
+  // Size columns — plain integers or W-prefixed (W24, W25…); strip the W
   const sizeCols = headers.reduce((acc, h, i) => {
-    if (/^\d+$/.test(h)) acc.push({ i, size: h });
+    const m = h.match(/^[Ww]?(\d+)$/);
+    if (m) acc.push({ i, size: m[1] });
     return acc;
   }, []);
 
@@ -394,11 +462,11 @@ function parseGraded(rawText, type, takeHalf) {
   const sizes = {};
   for (const { size } of sizeCols) sizes[size] = {};
 
-  for (let r = 1; r < lines.length; r++) {
+  for (let r = dataStartIdx; r < lines.length; r++) {
     const cols = lines[r].split('\t').map(c => c.trim());
     const desc    = cols[descIdx] ?? '';
     const altDesc = descAltIdx >= 0 ? (cols[descAltIdx] ?? '') : '';
-    const field = matchGradedField(desc, altDesc);
+    const field = matchGradedField(desc, altDesc, type);
     if (!field) continue;
 
     for (const { i, size } of sizeCols) {
@@ -442,14 +510,17 @@ function parseGraded(rawText, type, takeHalf) {
     computeSleeve(m);
   }
 
-  return { sizes, errors: [] };
+  return { sizes: expandInseamCombinations(sizes), errors: [] };
 }
 
 // ─── Main parse entry point ───────────────────────────────────────────────────
 
 function isGradedFormat(rawText) {
-  const first = rawText.trim().split('\n')[0].toLowerCase().trim();
-  return first.startsWith('dim\t') || first.startsWith('ref\t') || /^pom\s*(code|name)?\t/.test(first);
+  const lines = rawText.trim().split('\n').slice(0, 3).map(l => l.toLowerCase().trim());
+  return lines.some(l =>
+    l.startsWith('dim\t') || l.startsWith('ref\t') || l.startsWith('code\t') ||
+    /^pom\s*(code|name)?\t/.test(l)
+  );
 }
 
 function isTabularFormat(rawText) {
@@ -471,11 +542,24 @@ function toOutputJSON(sizes, type) {
   return inner.slice(2, -2).replace(/^  /mg, '');
 }
 
+function toOutputTable(sizes, type) {
+  const fields = TABLE_FIELD_ORDER[type] ?? [];
+  const sizeNames = Object.keys(sizes);
+  const activeFields = fields.filter(f => sizeNames.some(s => f in sizes[s]));
+  const header = ['Size name', ...activeFields.map(f => FIELD_DISPLAY_NAMES[f] ?? f)].join('\t');
+  const rows = sizeNames.map(name => {
+    const m = sizes[name];
+    return [name, ...activeFields.map(f => f in m ? m[f] : '')].join('\t');
+  });
+  return [header, ...rows].join('\n');
+}
+
 // ─── UI ───────────────────────────────────────────────────────────────────────
 
-const parseBtn = document.getElementById('parse-btn');
-const halfBtn  = document.getElementById('half-btn');
-const copyBtn  = document.getElementById('copy-btn');
+const parseBtn  = document.getElementById('parse-btn');
+const halfBtn   = document.getElementById('half-btn');
+const tableBtn  = document.getElementById('table-btn');
+const copyBtn   = document.getElementById('copy-btn');
 const inputText = document.getElementById('input-text');
 const typeSelect = document.getElementById('type-select');
 const outputSection = document.getElementById('output-section');
@@ -486,6 +570,12 @@ let takeHalf = false;
 halfBtn.addEventListener('click', () => {
   takeHalf = !takeHalf;
   halfBtn.classList.toggle('active', takeHalf);
+});
+
+let tableMode = false;
+tableBtn.addEventListener('click', () => {
+  tableMode = !tableMode;
+  tableBtn.classList.toggle('active', tableMode);
 });
 
 parseBtn.addEventListener('click', () => {
@@ -507,7 +597,7 @@ parseBtn.addEventListener('click', () => {
     return;
   }
 
-  outputPre.textContent = toOutputJSON(sizes, type);
+  outputPre.textContent = tableMode ? toOutputTable(sizes, type) : toOutputJSON(sizes, type);
   outputSection.classList.remove('hidden');
 
   if (errors.length) {
