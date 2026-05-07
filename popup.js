@@ -246,7 +246,7 @@ function parseSingleLine(rawText, type) {
 
 // Height priority tags — resolved after all rows are processed
 // Priority: HPS+CB > HPS > CB > CF > other
-const HEIGHT_PRIORITY = ['height$hps_cb', 'height$hps', 'height$cb', 'height$cf', 'height$other'];
+const HEIGHT_PRIORITY = ['height$hps_cb', 'height$hps', 'height$full', 'height$cb', 'height$cf', 'height$other'];
 
 // Map description text → output field. Order matters: more specific first.
 function matchGradedField(desc) {
@@ -267,7 +267,7 @@ function matchGradedField(desc) {
     if (hasHps)          return 'height$hps';
     if (hasCb)           return 'height$cb';
     if (hasCf)           return 'height$cf';
-    if (/(full|body|total|\bfront\b|\bback\b) length/.test(d)) return 'height$other';
+    if (/(full|body|total) length/.test(d)) return 'height$full';
   }
   return null;
 }
