@@ -76,6 +76,30 @@ textarea::placeholder {
   color: #4b5563;
 }
 
+.toggle-btn {
+  background: #1e1e3a;
+  color: #9ca3af;
+  border: 1px solid #2d2d4e;
+  border-radius: 6px;
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  width: 100%;
+  text-align: left;
+}
+
+.toggle-btn::before { content: '○  '; }
+
+.toggle-btn.active {
+  background: #1e2d1e;
+  color: #6ee7b7;
+  border-color: #065f46;
+}
+
+.toggle-btn.active::before { content: '●  '; }
+
 #parse-btn {
   background: #7c3aed;
   color: #fff;

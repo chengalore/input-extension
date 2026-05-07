@@ -93,12 +93,14 @@ const PANTS_COLUMN_MAP = {
 
 // ─── Measurement normalization ────────────────────────────────────────────────
 
-// Circumference fields over 100 are full measurements — halve them
+// Fields eligible for "take half" — stores original as {field}_round
 const HALVE_FIELDS = new Set(['bust', 'waist', 'hem', 'hip', 'thigh', 'knee', 'legOpening']);
 
-function normalizeMeasurements(measurements) {
+function normalizeMeasurements(measurements, takeHalf) {
+  if (!takeHalf) return;
   for (const field of HALVE_FIELDS) {
-    if (field in measurements && measurements[field] > 100) {
+    if (field in measurements) {
+      measurements[`${field}_round`] = measurements[field];
       measurements[field] = measurements[field] / 2;
     }
   }
@@ -110,7 +112,7 @@ function extractNumbers(str) {
   return [...str.matchAll(/[\d.]+/g)].map(m => parseFloat(m[0]));
 }
 
-function parseTabular(rawText, type) {
+function parseTabular(rawText, type, takeHalf) {
   const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
   if (lines.length < 2) {
     return { sizes: {}, errors: ['Need at least a header row and one data row.'] };
@@ -153,7 +155,7 @@ function parseTabular(rawText, type) {
       measurements[field] = nums[0];
     }
 
-    normalizeMeasurements(measurements);
+    normalizeMeasurements(measurements, takeHalf);
 
     // sleeve = half shoulder + sleeve_length — only when not directly measured
     if ('shoulder' in measurements && 'sleeve_length' in measurements && !('sleeve' in measurements)) {
@@ -236,7 +238,7 @@ function parseSegment(segment, type) {
   return result;
 }
 
-function parseSingleLine(rawText, type) {
+function parseSingleLine(rawText, type, takeHalf) {
   const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
   const sizes = {};
   const errors = [];
@@ -335,7 +337,7 @@ function matchGradedField(desc, altDesc = '') {
 
 const RISE_TAGS = ['frontRise$incl', 'frontRise$excl', 'backRise$incl', 'backRise$excl'];
 
-function parseGraded(rawText, type) {
+function parseGraded(rawText, type, takeHalf) {
   const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
   if (lines.length < 2) return { sizes: {}, errors: ['Need header + data rows.'] };
 
@@ -377,16 +379,13 @@ function parseGraded(rawText, type) {
   }
 
   for (const m of Object.values(sizes)) {
-    normalizeMeasurements(m);
-
-    // Resolve waist: relaxed > stretched > generic, halve if full circumference
+    // Resolve waist: relaxed > stretched > generic
     for (const key of WAIST_PRIORITY) {
-      if (key in m) {
-        m.waist = m[key] > 100 ? m[key] / 2 : m[key];
-        break;
-      }
+      if (key in m) { m.waist = m[key]; break; }
     }
     for (const key of WAIST_PRIORITY) delete m[key];
+
+    normalizeMeasurements(m, takeHalf);
 
     // Resolve front/back rise — add waistband height when measurement excludes it
     const wb = m._waistband ?? 0;
@@ -424,10 +423,10 @@ function isTabularFormat(rawText) {
   return firstLine.startsWith('size\t') || firstLine === 'size';
 }
 
-function parse(rawText, type) {
-  if (isGradedFormat(rawText)) return parseGraded(rawText, type);
-  if (TOPS_TYPES.has(type) || PANTS_TYPES.has(type) || isTabularFormat(rawText)) return parseTabular(rawText, type);
-  return parseSingleLine(rawText, type);
+function parse(rawText, type, takeHalf) {
+  if (isGradedFormat(rawText)) return parseGraded(rawText, type, takeHalf);
+  if (TOPS_TYPES.has(type) || PANTS_TYPES.has(type) || isTabularFormat(rawText)) return parseTabular(rawText, type, takeHalf);
+  return parseSingleLine(rawText, type, takeHalf);
 }
 
 // ─── Formatting ───────────────────────────────────────────────────────────────
@@ -441,12 +440,19 @@ function toOutputJSON(sizes, type) {
 // ─── UI ───────────────────────────────────────────────────────────────────────
 
 const parseBtn = document.getElementById('parse-btn');
-const copyBtn = document.getElementById('copy-btn');
+const halfBtn  = document.getElementById('half-btn');
+const copyBtn  = document.getElementById('copy-btn');
 const inputText = document.getElementById('input-text');
 const typeSelect = document.getElementById('type-select');
 const outputSection = document.getElementById('output-section');
 const outputPre = document.getElementById('output');
 const errorMsg = document.getElementById('error-msg');
+
+let takeHalf = false;
+halfBtn.addEventListener('click', () => {
+  takeHalf = !takeHalf;
+  halfBtn.classList.toggle('active', takeHalf);
+});
 
 parseBtn.addEventListener('click', () => {
   const raw = inputText.value.trim();
@@ -460,7 +466,7 @@ parseBtn.addEventListener('click', () => {
     return;
   }
 
-  const { sizes, errors } = parse(raw, type);
+  const { sizes, errors } = parse(raw, type, takeHalf);
 
   if (Object.keys(sizes).length === 0) {
     showError(errors.length ? errors.join('\n') : 'No measurements found. Check the format.');
