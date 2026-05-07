@@ -27,9 +27,17 @@ const TYPE_CONFIG = {
     required: ['height', 'bust'],
     optional: ['shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem'],
   },
+  dressALine: {
+    required: ['height', 'bust'],
+    optional: ['shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem'],
+  },
+  tunicSleeve: {
+    required: ['height', 'bust'],
+    optional: ['shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem'],
+  },
 };
 
-const TOPS_TYPES = new Set(['shirt', 'tShirt', 'jacket', 'coat', 'dress']);
+const TOPS_TYPES = new Set(['shirt', 'tShirt', 'jacket', 'coat', 'dress', 'dressALine', 'tunicSleeve']);
 
 // Column header (lowercase) → output field name
 const TOPS_COLUMN_MAP = {
