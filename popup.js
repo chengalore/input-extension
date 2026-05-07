@@ -80,6 +80,9 @@ const TOPS_COLUMN_MAP = {
 // Waist priority: relaxed > stretched > generic
 const WAIST_PRIORITY = ['waist$relaxed', 'waist$stretched', 'waist$other'];
 
+// Hip priority: low hip > high hip > generic
+const HIP_PRIORITY = ['hip$low', 'hip$high'];
+
 // Column header (lowercase) → output field name, for pants (tabular format)
 const PANTS_COLUMN_MAP = {
   'waist':            'waist',
@@ -291,6 +294,13 @@ function matchGradedField(desc, altDesc = '') {
   if (/(chest|bust)/.test(d) && !/pocket/.test(d)) return 'bust';
   if (/(bicep|upper sleeve width)/.test(d)) return 'bicep';
 
+  // Hip — checked BEFORE waist because descriptions like "High Hip @ below waist edge"
+  // contain "waist" as a reference point and would otherwise match waist
+  if (/\bhip\b/.test(d) && !/position/.test(d)) {
+    if (/\blow\b/.test(d)) return 'hip$low';
+    return 'hip$high';  // high hip or unspecified — lower priority
+  }
+
   // Waist — tagged for priority: relaxed > stretched > generic
   // Exclude waistband, position measurements, and horizontal width measurements
   if (/waist/.test(d) && !/band|position|pocket|horizontal/.test(d)) {
@@ -300,7 +310,6 @@ function matchGradedField(desc, altDesc = '') {
   }
 
   // Pants circumferences — check before generic hem to avoid legOpening → hem
-  if (/\bhip\b/.test(d) && !/position/.test(d)) return 'hip';
   if (/\bthigh\b/.test(d)) return 'thigh';
   if (/\bknee\b/.test(d)) return 'knee';
   if (/(leg\s*(bottom|opening))/.test(d)) return 'legOpening';
@@ -406,6 +415,12 @@ function parseGraded(rawText, type, takeHalf) {
       if (key in m) { m.waist = m[key]; break; }
     }
     for (const key of WAIST_PRIORITY) delete m[key];
+
+    // Resolve hip: low > high
+    for (const key of HIP_PRIORITY) {
+      if (key in m) { m.hip = m[key]; break; }
+    }
+    for (const key of HIP_PRIORITY) delete m[key];
 
     normalizeMeasurements(m, takeHalf);
 
