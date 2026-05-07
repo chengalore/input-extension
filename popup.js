@@ -17,12 +17,16 @@ const TYPE_CONFIG = {
  *   "ONE SIZE\t:\tDimensions: ..."
  *   "SMALL : Dimensions: ..."
  */
+const QUALIFIER_LABEL = /^approx\.?$/i;
+
 function splitLine(line) {
   // Match label then optional-whitespace:whitespace then rest
   // Handles "ONE SIZE : ...", "ONE SIZE\t:\t...", and "Approx.: ..."
   const m = line.match(/^(.+?)\s*:\s+(.+)$/);
   if (!m) return null;
-  return [m[1].trim(), m[2].trim()];
+  const label = m[1].trim();
+  // Qualifiers like "Approx." are prefixes, not real size labels
+  return [QUALIFIER_LABEL.test(label) ? 'ONE SIZE' : label, m[2].trim()];
 }
 
 /**
