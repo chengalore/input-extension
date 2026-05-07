@@ -406,6 +406,14 @@ function matchGradedField(desc, altDesc = '', type = '') {
 
 const RISE_TAGS = ['frontRise$incl', 'frontRise$excl', 'backRise$incl', 'backRise$excl'];
 
+// Excel TSV copies multi-line cell values as "first line\nsecond line" with surrounding quotes.
+// Collapse each quoted block to just its first non-empty line so the header row is one line.
+function normalizeQuotedTSV(text) {
+  return text.replace(/"([^"]*)"/g, (_, inner) => {
+    return inner.split('\n').map(s => s.trim()).find(Boolean) ?? '';
+  });
+}
+
 // Sleeve computation — raglan takes priority over standard shoulder + sleeve_length
 function computeSleeve(m) {
   if ('_raglanSleeve' in m) {
@@ -448,7 +456,7 @@ function expandInseamCombinations(sizes) {
 }
 
 function parseGraded(rawText, type, takeHalf) {
-  const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
+  const lines = normalizeQuotedTSV(rawText).split('\n').map(l => l.trim()).filter(Boolean);
   if (lines.length < 2) return { sizes: {}, errors: ['Need header + data rows.'] };
 
   // Skip title rows — find the first line that looks like a spec header
@@ -475,14 +483,19 @@ function parseGraded(rawText, type, takeHalf) {
   // Find alt-description column for incl./excl. WB annotations
   const descAltIdx = headers.findIndex(h => /description.*(alt|\(alt\))/i.test(h));
 
-  // Size columns — plain integers or W-prefixed (W24, W25…); strip the W
+  // Size columns: any non-empty header that isn't the POM/code, description,
+  // alt-description, or tolerance column. Handles numeric (32, W24) and text (XS, S/XS) sizes.
   const sizeCols = headers.reduce((acc, h, i) => {
-    const m = h.match(/^[Ww]?(\d+)$/);
-    if (m) acc.push({ i, size: m[1] });
+    if (i === 0) return acc;                              // skip POM/code column
+    if (i === descIdx) return acc;                        // skip description column
+    if (descAltIdx >= 0 && i === descAltIdx) return acc; // skip alt description
+    if (!h || /^tol/i.test(h) || !/[A-Za-z0-9]/.test(h)) return acc; // skip empty/tol/symbols
+    const num = h.match(/^[Ww]?(\d+)$/);
+    acc.push({ i, size: num ? num[1] : h });
     return acc;
   }, []);
 
-  if (sizeCols.length === 0) return { sizes: {}, errors: ['No size columns (numeric headers) found.'] };
+  if (sizeCols.length === 0) return { sizes: {}, errors: ['No size columns found.'] };
 
   const sizes = {};
   for (const { size } of sizeCols) sizes[size] = {};
@@ -541,7 +554,7 @@ function parseGraded(rawText, type, takeHalf) {
 // ─── Main parse entry point ───────────────────────────────────────────────────
 
 function isGradedFormat(rawText) {
-  const lines = rawText.trim().split('\n').slice(0, 3).map(l => l.toLowerCase().trim());
+  const lines = normalizeQuotedTSV(rawText).trim().split('\n').slice(0, 3).map(l => l.toLowerCase().trim());
   return lines.some(l =>
     l.startsWith('dim\t') || l.startsWith('ref\t') || l.startsWith('code\t') ||
     /^pom\s*(code|name)?\t/.test(l)
