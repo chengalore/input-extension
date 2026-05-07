@@ -39,7 +39,17 @@ const TYPE_CONFIG = {
 
 const TOPS_TYPES = new Set(['shirt', 'tShirt', 'jacket', 'coat', 'dress', 'dressALine', 'tunicSleeve']);
 
-// Column header (lowercase) → output field name
+// Column header (lowercase) → output field name, for bags
+const BAG_COLUMN_MAP = {
+  'width':    'width',
+  'height':   'height',
+  'depth':    'depth',
+  'machi':    'depth',   // Japanese term for gusset/depth
+  'thickness':'depth',
+  'length':   'height',
+};
+
+// Column header (lowercase) → output field name, for tops
 const TOPS_COLUMN_MAP = {
   'length':           'height',
   'total length':     'height',
@@ -77,11 +87,13 @@ function parseTabular(rawText, type) {
     return { sizes: {}, errors: ['No "size" column found in header row.'] };
   }
 
+  const colMap = TOPS_TYPES.has(type) ? TOPS_COLUMN_MAP : BAG_COLUMN_MAP;
+
   // Map each column index to its output field name
   const indexToField = {};
   headers.forEach((h, i) => {
     if (i === sizeIdx) return;
-    const field = TOPS_COLUMN_MAP[h];
+    const field = colMap[h];
     if (field) indexToField[i] = field;
   });
 
@@ -217,8 +229,13 @@ function parseSingleLine(rawText, type) {
 
 // ─── Main parse entry point ───────────────────────────────────────────────────
 
+function isTabularFormat(rawText) {
+  const firstLine = rawText.trim().split('\n')[0].toLowerCase().trim();
+  return firstLine.startsWith('size\t') || firstLine === 'size';
+}
+
 function parse(rawText, type) {
-  if (TOPS_TYPES.has(type)) {
+  if (TOPS_TYPES.has(type) || isTabularFormat(rawText)) {
     return parseTabular(rawText, type);
   }
   return parseSingleLine(rawText, type);
