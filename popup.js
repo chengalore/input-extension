@@ -65,8 +65,11 @@ const TOPS_COLUMN_MAP = {
   'chest':            'bust',
   'bust':             'bust',
   'bust width':       'bust',
-  'sleeve length':    'sleeve_length',
-  'sleeve':           'sleeve',
+  'sleeve length':        'sleeve_length',
+  'sleeve':               'sleeve',
+  'raglan sleeve':        '_raglanSleeve',
+  'raglan sleeve length': '_raglanSleeve',
+  'neck width':           '_neckWidth',
   'waist':            'waist',
   'waist width':      'waist',
   'hem':              'hem',
@@ -157,10 +160,7 @@ function parseTabular(rawText, type, takeHalf) {
 
     normalizeMeasurements(measurements, takeHalf);
 
-    // sleeve = half shoulder + sleeve_length — only when not directly measured
-    if ('shoulder' in measurements && 'sleeve_length' in measurements && !('sleeve' in measurements)) {
-      measurements.sleeve = measurements.shoulder / 2 + measurements.sleeve_length;
-    }
+    computeSleeve(measurements);
 
     const config = TYPE_CONFIG[type];
     const missing = config.required.filter(k => !(k in measurements));
@@ -279,6 +279,11 @@ function matchGradedField(desc, altDesc = '') {
   const d = desc.toLowerCase();
   const a = altDesc.toLowerCase();
 
+  // Raglan sleeve — before standard sleeve checks
+  if (/raglan.*sleeve|sleeve.*raglan/.test(d)) return '_raglanSleeve';
+  // Neck width — stored internally for raglan total sleeve computation
+  if (/\bneck\s*(width|opening)\b/.test(d)) return '_neckWidth';
+
   // Tops: sleeve
   if (/sleeve length from (shoulder|shoulder seam)/.test(d)) return 'sleeve_length';
   if (/sleeve length from (cb|centre back|center back)/.test(d)) return 'sleeve';
@@ -336,6 +341,19 @@ function matchGradedField(desc, altDesc = '') {
 }
 
 const RISE_TAGS = ['frontRise$incl', 'frontRise$excl', 'backRise$incl', 'backRise$excl'];
+
+// Sleeve computation — raglan takes priority over standard shoulder + sleeve_length
+function computeSleeve(m) {
+  if ('_raglanSleeve' in m) {
+    // Raglan: total sleeve = raglan measurement + half neck width
+    m.sleeve = m._raglanSleeve + ('_neckWidth' in m ? m._neckWidth / 2 : 0);
+  } else if ('shoulder' in m && 'sleeve_length' in m && !('sleeve' in m)) {
+    // Standard: sleeve from CB = half shoulder + sleeve_length
+    m.sleeve = m.shoulder / 2 + m.sleeve_length;
+  }
+  delete m._raglanSleeve;
+  delete m._neckWidth;
+}
 
 function parseGraded(rawText, type, takeHalf) {
   const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
@@ -402,10 +420,7 @@ function parseGraded(rawText, type, takeHalf) {
     }
     for (const key of HEIGHT_PRIORITY) delete m[key];
 
-    // Compute sleeve when not directly measured
-    if ('shoulder' in m && 'sleeve_length' in m && !('sleeve' in m)) {
-      m.sleeve = m.shoulder / 2 + m.sleeve_length;
-    }
+    computeSleeve(m);
   }
 
   return { sizes, errors: [] };
