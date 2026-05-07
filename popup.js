@@ -35,13 +35,17 @@ const TYPE_CONFIG = {
     required: ['height', 'bust'],
     optional: ['shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem'],
   },
+  top: {
+    required: ['height', 'bust'],
+    optional: ['waist', 'hem', 'armOpening'],
+  },
   pants: {
     required: ['inseam', 'waist', 'hip', 'thigh'],
     optional: ['knee', 'legOpening', 'frontRise', 'backRise'],
   },
 };
 
-const TOPS_TYPES  = new Set(['shirt', 'tShirt', 'jacket', 'coat', 'dress', 'dressALine', 'tunicSleeve']);
+const TOPS_TYPES  = new Set(['shirt', 'tShirt', 'jacket', 'coat', 'dress', 'dressALine', 'tunicSleeve', 'top']);
 const PANTS_TYPES = new Set(['pants']);
 
 // Column header (lowercase) → output field name, for bags
@@ -75,6 +79,9 @@ const TOPS_COLUMN_MAP = {
   'hem':              'hem',
   'hem width':        'hem',
   'bicep':            'bicep',
+  'arm opening':      'armOpening',
+  'armhole':          'armOpening',
+  'arm hole':         'armOpening',
 };
 
 // Waist priority: relaxed > stretched > generic
@@ -100,14 +107,14 @@ const PANTS_COLUMN_MAP = {
 // ─── Measurement normalization ────────────────────────────────────────────────
 
 // Fields eligible for "take half" — stores original as {field}_round
-const HALVE_FIELDS = new Set(['bust', 'waist', 'hem', 'hip', 'thigh', 'knee', 'legOpening']);
+const HALVE_FIELDS = new Set(['bust', 'waist', 'hem', 'hip', 'thigh', 'knee', 'legOpening', 'armOpening']);
 
 const FIELD_DISPLAY_NAMES = {
   height: 'Length', bust: 'Bust', shoulder: 'Shoulder',
   sleeve_length: 'Sleeve length', sleeve: 'Sleeve',
   waist: 'Waist', hem: 'Hem', bicep: 'Bicep',
   inseam: 'Inseam', hip: 'Hip', thigh: 'Thigh',
-  knee: 'Knee', legOpening: 'Ankle opening',
+  knee: 'Knee', legOpening: 'Ankle opening', armOpening: 'Arm opening',
   frontRise: 'Front rise', backRise: 'Back rise',
   width: 'Width', depth: 'Depth',
 };
@@ -121,6 +128,7 @@ const TABLE_FIELD_ORDER = {
   dress:       ['height', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem'],
   dressALine:  ['height', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem'],
   tunicSleeve: ['height', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem'],
+  top:         ['height', 'bust', 'waist', 'hem', 'armOpening'],
   pants:       ['inseam', 'waist', 'hip', 'thigh', 'knee', 'legOpening', 'frontRise', 'backRise'],
 };
 
@@ -340,6 +348,7 @@ function matchGradedField(desc, altDesc = '', type = '') {
   if (/(across shoulder|shoulder across|shoulder width)/.test(d)) return 'shoulder';
   if (/(chest|bust)/.test(d) && !/pocket/.test(d)) return 'bust';
   if (/(bicep|upper sleeve width)/.test(d)) return 'bicep';
+  if (/(arm\s*(hole|opening)|armhole)/.test(d)) return 'armOpening';
 
   // Hip (and seat as synonym) — checked BEFORE waist because descriptions like
   // "High Hip @ below waist edge" contain "waist" as a reference point
