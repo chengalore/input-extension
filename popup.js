@@ -244,6 +244,10 @@ function parseSingleLine(rawText, type) {
 
 // ─── Graded measurement parser (Excel spec sheet: sizes as columns) ──────────
 
+// Height priority tags — resolved after all rows are processed
+// Priority: HPS+CB > HPS > CB > CF > other
+const HEIGHT_PRIORITY = ['height$hps_cb', 'height$hps', 'height$cb', 'height$cf', 'height$other'];
+
 // Map description text → output field. Order matters: more specific first.
 function matchGradedField(desc) {
   const d = desc.toLowerCase();
@@ -252,9 +256,19 @@ function matchGradedField(desc) {
   if (/(across shoulder|shoulder across|shoulder width)/.test(d)) return 'shoulder';
   if (/(chest|bust)/.test(d) && !/pocket/.test(d)) return 'bust';
   if (/waist/.test(d) && !/position/.test(d)) return 'waist';
-  if (/bottom width/.test(d) && !/sleeve/.test(d)) return 'hem';   // exclude sleeve hem
+  if (/bottom width/.test(d) && !/sleeve/.test(d)) return 'hem';
   if (/(bicep|upper sleeve width)/.test(d)) return 'bicep';
-  if (/(front|back|full) length|body length|total length/.test(d)) return 'height';
+  // Height — tag by reference so we can resolve by priority later
+  if (/length/.test(d)) {
+    const hasHps = /from (hps|highest point shoulder)/.test(d);
+    const hasCb  = /(cb|centre back|center back|\bback\b)/.test(d);
+    const hasCf  = /(cf|centre front|center front|\bfront\b)/.test(d);
+    if (hasHps && hasCb) return 'height$hps_cb';
+    if (hasHps)          return 'height$hps';
+    if (hasCb)           return 'height$cb';
+    if (hasCf)           return 'height$cf';
+    if (/(full|body|total|\bfront\b|\bback\b) length/.test(d)) return 'height$other';
+  }
   return null;
 }
 
@@ -298,6 +312,11 @@ function parseGraded(rawText, type) {
 
   for (const m of Object.values(sizes)) {
     normalizeMeasurements(m);
+    // Resolve height: pick highest-priority tagged variant available
+    for (const key of HEIGHT_PRIORITY) {
+      if (key in m) { m.height = m[key]; break; }
+    }
+    for (const key of HEIGHT_PRIORITY) delete m[key];
     // Compute sleeve when not directly measured
     if ('shoulder' in m && 'sleeve_length' in m && !('sleeve' in m)) {
       m.sleeve = m.shoulder / 2 + m.sleeve_length;
