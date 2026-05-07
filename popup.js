@@ -490,6 +490,8 @@ function parseGraded(rawText, type, takeHalf) {
     if (i === descIdx) return acc;                        // skip description column
     if (descAltIdx >= 0 && i === descAltIdx) return acc; // skip alt description
     if (!h || /^tol/i.test(h) || !/[A-Za-z0-9]/.test(h)) return acc; // skip empty/tol/symbols
+    // Skip columns whose header looks like a code or description label, not a size
+    if (/^(pom|code|ref|dim|desc|meas|point)/i.test(h)) return acc;
     const num = h.match(/^[Ww]?(\d+)$/);
     acc.push({ i, size: num ? num[1] : h });
     return acc;
