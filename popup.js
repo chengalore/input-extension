@@ -116,8 +116,8 @@ function parseTabular(rawText, type) {
       measurements[field] = nums[0];
     }
 
-    // sleeve = half shoulder + sleeve_length (center back neck to sleeve edge)
-    if ('shoulder' in measurements && 'sleeve_length' in measurements) {
+    // sleeve = half shoulder + sleeve_length — only when not directly measured
+    if ('shoulder' in measurements && 'sleeve_length' in measurements && !('sleeve' in measurements)) {
       measurements.sleeve = measurements.shoulder / 2 + measurements.sleeve_length;
     }
 
@@ -227,7 +227,76 @@ function parseSingleLine(rawText, type) {
   return { sizes, errors };
 }
 
+// ─── Graded measurement parser (Excel spec sheet: sizes as columns) ──────────
+
+// Map description text → output field. Order matters: more specific first.
+function matchGradedField(desc) {
+  const d = desc.toLowerCase();
+  if (/sleeve length from (shoulder|shoulder seam)/.test(d)) return 'sleeve_length';
+  if (/sleeve length from (cb|centre back|center back)/.test(d)) return 'sleeve';
+  if (/(across shoulder|shoulder across|shoulder width)/.test(d)) return 'shoulder';
+  if (/(chest|bust)/.test(d)) return 'bust';
+  if (/waist/.test(d) && !/position/.test(d)) return 'waist';
+  if (/bottom width/.test(d)) return 'hem';
+  if (/(bicep|upper sleeve width)/.test(d)) return 'bicep';
+  if (/(front|back) length|body length|total length/.test(d)) return 'height';
+  return null;
+}
+
+function parseGraded(rawText, type) {
+  const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
+  if (lines.length < 2) return { sizes: {}, errors: ['Need header + data rows.'] };
+
+  const headers = lines[0].split('\t').map(h => h.trim());
+
+  // Find the description column ("Description" or "POM Name"), fallback to index 1
+  const descIdx = (() => {
+    const i = headers.findIndex(h => /^description$/i.test(h) || /^pom\s*name$/i.test(h));
+    return i !== -1 ? i : 1;
+  })();
+
+  // Size columns = headers that are plain integers (32, 34, 42, 44, …)
+  const sizeCols = headers.reduce((acc, h, i) => {
+    if (/^\d+$/.test(h)) acc.push({ i, size: h });
+    return acc;
+  }, []);
+
+  if (sizeCols.length === 0) return { sizes: {}, errors: ['No size columns (numeric headers) found.'] };
+
+  // Initialise empty measurements for each size
+  const sizes = {};
+  for (const { size } of sizeCols) sizes[size] = {};
+
+  for (let r = 1; r < lines.length; r++) {
+    const cols = lines[r].split('\t').map(c => c.trim());
+    const desc = cols[descIdx] ?? '';
+    const field = matchGradedField(desc);
+    if (!field) continue;
+
+    for (const { i, size } of sizeCols) {
+      const val = parseFloat(cols[i]);
+      if (!isNaN(val) && !(field in sizes[size])) {
+        sizes[size][field] = val;
+      }
+    }
+  }
+
+  // Compute sleeve when not directly measured
+  for (const m of Object.values(sizes)) {
+    if ('shoulder' in m && 'sleeve_length' in m && !('sleeve' in m)) {
+      m.sleeve = m.shoulder / 2 + m.sleeve_length;
+    }
+  }
+
+  return { sizes, errors: [] };
+}
+
 // ─── Main parse entry point ───────────────────────────────────────────────────
+
+function isGradedFormat(rawText) {
+  const first = rawText.trim().split('\n')[0].toLowerCase().trim();
+  return first.startsWith('dim\t') || /^pom\s*(code|name)?\t/.test(first);
+}
 
 function isTabularFormat(rawText) {
   const firstLine = rawText.trim().split('\n')[0].toLowerCase().trim();
@@ -235,9 +304,8 @@ function isTabularFormat(rawText) {
 }
 
 function parse(rawText, type) {
-  if (TOPS_TYPES.has(type) || isTabularFormat(rawText)) {
-    return parseTabular(rawText, type);
-  }
+  if (isGradedFormat(rawText)) return parseGraded(rawText, type);
+  if (TOPS_TYPES.has(type) || isTabularFormat(rawText)) return parseTabular(rawText, type);
   return parseSingleLine(rawText, type);
 }
 
