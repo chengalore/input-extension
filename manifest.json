@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Measurement Parser",
+  "version": "1.0",
+  "description": "Parse product measurements into structured JSON",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Measurement Parser"
+  },
+  "permissions": ["clipboardWrite"]
+}

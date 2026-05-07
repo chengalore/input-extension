@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Measurement Parser</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="container">
+    <h1>Measurement Parser</h1>
+
+    <div class="field">
+      <label for="type-select">Product type</label>
+      <select id="type-select">
+        <option value="bag">Bag</option>
+      </select>
+    </div>
+
+    <div class="field">
+      <label for="input-text">Paste measurement text</label>
+      <textarea
+        id="input-text"
+        placeholder="ONE SIZE&#9;:&#9;Dimensions: 10.5 x 8.5 cm / Thickness: 2.5 cm"
+        spellcheck="false"
+      ></textarea>
+    </div>
+
+    <button id="parse-btn">Parse</button>
+
+    <div id="output-section" class="hidden">
+      <div class="output-header">
+        <label>JSON output</label>
+        <button id="copy-btn" class="copy-btn">Copy</button>
+      </div>
+      <pre id="output"></pre>
+    </div>
+
+    <div id="error-msg" class="error hidden"></div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

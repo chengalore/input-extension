@@ -1,0 +1,154 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  min-width: 420px;
+  padding: 0;
+}
+
+.container {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+h1 {
+  font-size: 14px;
+  font-weight: 600;
+  color: #a78bfa;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+label {
+  font-size: 11px;
+  font-weight: 500;
+  color: #9ca3af;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+select,
+textarea {
+  background: #0f0f1a;
+  border: 1px solid #2d2d4e;
+  border-radius: 6px;
+  color: #e0e0e0;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+select:focus,
+textarea:focus {
+  border-color: #7c3aed;
+}
+
+select {
+  padding: 7px 10px;
+  width: 100%;
+  cursor: pointer;
+}
+
+textarea {
+  padding: 8px 10px;
+  width: 100%;
+  height: 90px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+textarea::placeholder {
+  color: #4b5563;
+}
+
+#parse-btn {
+  background: #7c3aed;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 9px 0;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+#parse-btn:hover {
+  background: #6d28d9;
+}
+
+#output-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.output-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.copy-btn {
+  background: #1e1e3a;
+  color: #a78bfa;
+  border: 1px solid #2d2d4e;
+  border-radius: 5px;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.copy-btn:hover {
+  background: #7c3aed;
+  color: #fff;
+}
+
+.copy-btn.copied {
+  background: #065f46;
+  color: #6ee7b7;
+  border-color: #065f46;
+}
+
+pre {
+  background: #0f0f1a;
+  border: 1px solid #2d2d4e;
+  border-radius: 6px;
+  padding: 10px;
+  font-size: 12px;
+  font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+  white-space: pre;
+  overflow-x: auto;
+  color: #a5f3fc;
+  line-height: 1.6;
+}
+
+.error {
+  background: #2d1b1b;
+  border: 1px solid #7f1d1d;
+  border-radius: 6px;
+  color: #fca5a5;
+  font-size: 12px;
+  padding: 8px 10px;
+}
+
+.hidden {
+  display: none !important;
+}
