@@ -359,7 +359,7 @@ function matchGradedField(desc, altDesc = '', type = '') {
 
   // Waist — tagged for priority: relaxed > stretched > generic
   // Exclude waistband, position measurements, and horizontal width measurements
-  if (/waist/.test(d) && !/band|position|pocket|horizontal/.test(d)) {
+  if (/waist/.test(d) && !/band|position|pocket|horizontal|\bto\s+waist\b/.test(d)) {
     if (/relax/.test(d)) return 'waist$relaxed';
     if (/stretch/.test(d)) return 'waist$stretched';
     return 'waist$other';
