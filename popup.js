@@ -310,18 +310,20 @@ function matchGradedField(desc, altDesc = '') {
 
   // Pants lengths
   if (/\boutseam\b/.test(d)) return null;
-  if (/\binseam\b/.test(d)) return 'inseam';
+  if (/\b(inseam|inleg)\b/.test(d)) return 'inseam';
 
-  // Waistband height — stored internally, used to adjust rise if needed
-  if (/waistband/.test(d) && /height/.test(d)) return '_waistband';
+  // Waistband height/depth — stored internally, used to adjust rise if needed
+  if (/waistband/.test(d) && /(height|depth)/.test(d)) return '_waistband';
 
   // Front/back rise — tag by whether waistband is included
   if (/front\s*rise/.test(d)) {
-    const inclWB = /incl\.?\s*wb|incl\.?\s*waist.?band/.test(a) || /incl\.?\s*wb/.test(d);
+    const inclWB = /incl\.?\s*wb|incl\.?\s*waist.?band|from waist edge/.test(a)
+                || /incl\.?\s*wb|from waist edge/.test(d);
     return inclWB ? 'frontRise$incl' : 'frontRise$excl';
   }
   if (/back\s*rise/.test(d)) {
-    const inclWB = /incl\.?\s*wb|incl\.?\s*waist.?band/.test(a) || /incl\.?\s*wb/.test(d);
+    const inclWB = /incl\.?\s*wb|incl\.?\s*waist.?band|from waist edge/.test(a)
+                || /incl\.?\s*wb|from waist edge/.test(d);
     return inclWB ? 'backRise$incl' : 'backRise$excl';
   }
 
@@ -361,9 +363,11 @@ function parseGraded(rawText, type, takeHalf) {
 
   const headers = lines[0].split('\t').map(h => h.trim());
 
-  // Find description column ("Description" or "POM Name"), fallback to index 1
+  // Find description column ("Description", "POM Name", "Measuring Point"), fallback to index 1
   const descIdx = (() => {
-    const i = headers.findIndex(h => /^description$/i.test(h) || /^pom\s*name$/i.test(h));
+    const i = headers.findIndex(h =>
+      /^description$/i.test(h) || /^pom\s*name$/i.test(h) || /^measuring\s*point$/i.test(h)
+    );
     return i !== -1 ? i : 1;
   })();
 
@@ -430,7 +434,7 @@ function parseGraded(rawText, type, takeHalf) {
 
 function isGradedFormat(rawText) {
   const first = rawText.trim().split('\n')[0].toLowerCase().trim();
-  return first.startsWith('dim\t') || /^pom\s*(code|name)?\t/.test(first);
+  return first.startsWith('dim\t') || first.startsWith('ref\t') || /^pom\s*(code|name)?\t/.test(first);
 }
 
 function isTabularFormat(rawText) {
