@@ -250,11 +250,11 @@ function matchGradedField(desc) {
   if (/sleeve length from (shoulder|shoulder seam)/.test(d)) return 'sleeve_length';
   if (/sleeve length from (cb|centre back|center back)/.test(d)) return 'sleeve';
   if (/(across shoulder|shoulder across|shoulder width)/.test(d)) return 'shoulder';
-  if (/(chest|bust)/.test(d)) return 'bust';
+  if (/(chest|bust)/.test(d) && !/pocket/.test(d)) return 'bust';
   if (/waist/.test(d) && !/position/.test(d)) return 'waist';
-  if (/bottom width/.test(d)) return 'hem';
+  if (/bottom width/.test(d) && !/sleeve/.test(d)) return 'hem';   // exclude sleeve hem
   if (/(bicep|upper sleeve width)/.test(d)) return 'bicep';
-  if (/(front|back) length|body length|total length/.test(d)) return 'height';
+  if (/(front|back|full) length|body length|total length/.test(d)) return 'height';
   return null;
 }
 
