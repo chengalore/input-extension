@@ -260,6 +260,20 @@ function parseSegment(segment, type) {
     }
   }
 
+  // "{num} cm {letter}" format — e.g. "20.5 cm H x 26 cm L x 4 cm D"
+  // H=height, W=width, L=length(→width), D=depth
+  if (type === 'bag') {
+    const LETTER_MAP = { h: 'height', w: 'width', l: 'width', d: 'depth' };
+    const letterDims = [...segment.matchAll(/(\d+\.?\d*)\s*cm\s+([HWLDhwld])\b/g)];
+    if (letterDims.length > 0) {
+      for (const [, num, letter] of letterDims) {
+        const field = LETTER_MAP[letter.toLowerCase()];
+        if (field && !(field in result)) result[field] = parseFloat(num);
+      }
+      return result;
+    }
+  }
+
   return result;
 }
 
@@ -269,9 +283,19 @@ function parseSingleLine(rawText, type, takeHalf) {
   const errors = [];
 
   for (const line of lines) {
-    const split = splitLine(line);
+    let split = splitLine(line);
     if (!split) {
-      errors.push(`Could not parse line: "${line}"`);
+      // No "label : measurements" colon — try parsing the whole line as ONE SIZE
+      const segments = line.split('/').map(s => s.trim());
+      const bare = {};
+      for (const seg of segments) Object.assign(bare, parseSegment(seg, type));
+      if (Object.keys(bare).length > 0) {
+        const missing = TYPE_CONFIG[type].required.filter(k => !(k in bare));
+        if (missing.length) errors.push(`"ONE SIZE" is missing required fields: ${missing.join(', ')}`);
+        sizes['ONE SIZE'] = bare;
+      } else {
+        errors.push(`Could not parse line: "${line}"`);
+      }
       continue;
     }
     const [label, measurementStr] = split;
