@@ -69,6 +69,19 @@ const TOPS_COLUMN_MAP = {
   'bicep':            'bicep',
 };
 
+// ─── Measurement normalization ────────────────────────────────────────────────
+
+// bust/waist/hem over 100 are full circumference — halve them
+const HALVE_FIELDS = new Set(['bust', 'waist', 'hem']);
+
+function normalizeMeasurements(measurements) {
+  for (const field of HALVE_FIELDS) {
+    if (field in measurements && measurements[field] > 100) {
+      measurements[field] = measurements[field] / 2;
+    }
+  }
+}
+
 // ─── Tabular parser (shirt / tShirt / jacket / coat) ─────────────────────────
 
 function extractNumbers(str) {
@@ -115,6 +128,8 @@ function parseTabular(rawText, type) {
       // and "Before: 70 After: 73" → 70 (first is also the smaller one for shirts)
       measurements[field] = nums[0];
     }
+
+    normalizeMeasurements(measurements);
 
     // sleeve = half shoulder + sleeve_length — only when not directly measured
     if ('shoulder' in measurements && 'sleeve_length' in measurements && !('sleeve' in measurements)) {
@@ -281,8 +296,9 @@ function parseGraded(rawText, type) {
     }
   }
 
-  // Compute sleeve when not directly measured
   for (const m of Object.values(sizes)) {
+    normalizeMeasurements(m);
+    // Compute sleeve when not directly measured
     if ('shoulder' in m && 'sleeve_length' in m && !('sleeve' in m)) {
       m.sleeve = m.shoulder / 2 + m.sleeve_length;
     }
