@@ -19,6 +19,10 @@ const TYPE_CONFIG = {
     required: ['height', 'bust'],
     optional: ['shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem', 'bicep'],
   },
+  sweater: {
+    required: ['height', 'bust'],
+    optional: ['shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem', 'bicep'],
+  },
   coat: {
     required: ['height', 'bust'],
     optional: ['shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem', 'bicep'],
@@ -45,7 +49,7 @@ const TYPE_CONFIG = {
   },
 };
 
-const TOPS_TYPES  = new Set(['shirt', 'tShirt', 'jacket', 'coat', 'dress', 'dressALine', 'tunicSleeve', 'top']);
+const TOPS_TYPES  = new Set(['shirt', 'tShirt', 'jacket', 'coat', 'dress', 'dressALine', 'tunicSleeve', 'sweater',  'top']);
 const PANTS_TYPES = new Set(['pants']);
 
 // Column header (lowercase) → output field name, for bags
@@ -125,6 +129,7 @@ const TABLE_FIELD_ORDER = {
   tShirt:      ['height', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem', 'bicep'],
   jacket:      ['height', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem', 'bicep'],
   coat:        ['height', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem', 'bicep'],
+  sweater:        ['height', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem', 'bicep'],
   dress:       ['height', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem'],
   dressALine:  ['height', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem'],
   tunicSleeve: ['height', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem'],
@@ -416,10 +421,12 @@ function matchGradedField(desc, altDesc = '', type = '') {
 const RISE_TAGS = ['frontRise$incl', 'frontRise$excl', 'backRise$incl', 'backRise$excl'];
 
 // Excel TSV copies multi-line cell values as "first line\nsecond line" with surrounding quotes.
-// Collapse each quoted block to just its first non-empty line so the header row is one line.
+// Only match " at a field boundary (after \t or at line start) so mid-field inch marks like
+// "Inseam 28"" don't start a runaway match consuming adjacent columns.
+// RFC 4180: "" inside a quoted cell is an escaped quote.
 function normalizeQuotedTSV(text) {
-  return text.replace(/"([^"]*)"/g, (_, inner) => {
-    return inner.split('\n').map(s => s.trim()).find(Boolean) ?? '';
+  return text.replace(/(^|\t)"((?:[^"]|"")*)"/gm, (_, prefix, inner) => {
+    return prefix + (inner.replace(/""/g, '"').split('\n').map(s => s.trim()).find(Boolean) ?? '');
   });
 }
 
