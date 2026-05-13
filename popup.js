@@ -273,10 +273,31 @@ function parseSegment(segment, type) {
     }
   }
 
+  // "{letter}{num}×..." with cm only at end — e.g. "H28×W15×D8cm"
+  // "{letter}{num}cm" per-dimension — e.g. "W42.0cm x H35.0cm x D15.0cm"
   // "{num} cm {letter}" format — e.g. "20.5 cm H x 26 cm L x 4 cm D"
   // H=height, W=width, L=length(→width), D=depth
   if (type === 'bag') {
     const LETTER_MAP = { h: 'height', w: 'width', l: 'width', d: 'depth' };
+    // Trailing-cm: cm appears only at the end (not after each number before a separator)
+    if (/cm\s*$/i.test(segment) && !/\d\.?\d*\s*cm\s*[×xX]/i.test(segment)) {
+      const trailingDims = [...segment.matchAll(/([WHDLwhdl])(\d+\.?\d*)/gi)];
+      if (trailingDims.length > 1) {
+        for (const [, letter, num] of trailingDims) {
+          const field = LETTER_MAP[letter.toLowerCase()];
+          if (field && !(field in result)) result[field] = parseFloat(num);
+        }
+        return result;
+      }
+    }
+    const letterPrefixDims = [...segment.matchAll(/\b([WHDLwhdl])(\d+\.?\d*)\s*cm\b/g)];
+    if (letterPrefixDims.length > 0) {
+      for (const [, letter, num] of letterPrefixDims) {
+        const field = LETTER_MAP[letter.toLowerCase()];
+        if (field && !(field in result)) result[field] = parseFloat(num);
+      }
+      return result;
+    }
     const letterDims = [...segment.matchAll(/(\d+\.?\d*)\s*cm\s+([HWLDhwld])\b/g)];
     if (letterDims.length > 0) {
       for (const [, num, letter] of letterDims) {
