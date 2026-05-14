@@ -169,12 +169,13 @@ function parseTabular(rawText, type, takeHalf) {
                : PANTS_TYPES.has(type) ? PANTS_COLUMN_MAP
                : BAG_COLUMN_MAP;
 
-  // Map each column index to its output field name
+  // Map each column index to its output field name.
+  // Strip a leading "(Garment) " prefix so "(Blouse) Bust" → "bust" etc.
   const indexToField = {};
   headers.forEach((h, i) => {
     if (i === sizeIdx) return;
-    const field = colMap[h];
-    if (field) indexToField[i] = field;
+    const field = colMap[h] ?? colMap[h.replace(/^\([^)]+\)\s*/, '')];
+    if (field && !(i in indexToField)) indexToField[i] = field;
   });
 
   const sizes = {};
@@ -191,9 +192,10 @@ function parseTabular(rawText, type, takeHalf) {
       if (!cell) continue;
       const nums = extractNumbers(cell);
       if (nums.length === 0) continue;
-      // Always use the first number — covers "Dress: 122 Inner camisole: 83" → 122
-      // and "Before: 70 After: 73" → 70 (first is also the smaller one for shirts)
-      measurements[field] = nums[0];
+      // First column wins — covers "Dress: 122 Inner camisole: 83" → 122,
+      // "Before: 70 After: 73" → 70, and duplicate mapped fields like
+      // "(Blouse) Length" taking priority over "(Cape) Length" for height.
+      if (!(field in measurements)) measurements[field] = nums[0];
     }
 
     normalizeMeasurements(measurements, takeHalf);
