@@ -86,6 +86,14 @@ const TOPS_COLUMN_MAP = {
   'arm opening':      'armOpening',
   'armhole':          'armOpening',
   'arm hole':         'armOpening',
+  // Japanese field names
+  '肩巾':  'shoulder',
+  '肩幅':  'shoulder',
+  'バスト': 'bust',
+  '袖丈':  'sleeve_length',
+  '着丈':  'height',
+  'ウエスト': 'waist',
+  '裾幅':  'hem',
 };
 
 // Waist priority: relaxed > stretched > generic
@@ -230,9 +238,9 @@ function parseTabular(rawText, type, takeHalf) {
 const QUALIFIER_LABEL = /^approx\.?$/i;
 
 function splitLine(line) {
-  // Match label then optional-whitespace:whitespace then rest
-  // Handles "ONE SIZE : ...", "ONE SIZE\t:\t...", and "Approx.: ..."
-  const m = line.match(/^(.+?)\s*:\s+(.+)$/);
+  // Match label then optional-whitespace : whitespace then rest
+  // Handles ASCII ":" and fullwidth "："; space after colon is optional for Japanese text
+  const m = line.match(/^(.+?)\s*[:：]\s*(.+)$/);
   if (!m) return null;
   const label = m[1].trim();
   // Qualifiers like "Approx." are prefixes, not real size labels
@@ -324,7 +332,7 @@ function parseSegment(segment, type) {
   // Named tops measurements — e.g. "Shoulder width 52.5", "Bust 108 (body measurement 72-80)", "Length 69 (cm)"
   // Strip a leading qualifier like "(approx.)" then match the longest TOPS_COLUMN_MAP key at the start.
   if (TOPS_TYPES.has(type)) {
-    const s = segment.replace(/^\([^)]*\)\s*/, '').trim();
+    const s = segment.replace(/^[(（][^)）]*[)）]\s*/, '').trim();
     const sl = s.toLowerCase();
     const sortedKeys = Object.keys(TOPS_COLUMN_MAP).sort((a, b) => b.length - a.length);
     for (const key of sortedKeys) {
@@ -363,7 +371,7 @@ function parseSingleLine(rawText, type, takeHalf) {
       continue;
     }
     const [label, measurementStr] = split;
-    const segments = measurementStr.split(/[/,]/).map(s => s.trim()).filter(Boolean);
+    const segments = measurementStr.split(/[/,、]/).map(s => s.trim()).filter(Boolean);
     const measurements = {};
     for (const seg of segments) {
       Object.assign(measurements, parseSegment(seg, type));
