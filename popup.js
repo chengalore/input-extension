@@ -160,7 +160,9 @@ function parseTabular(rawText, type, takeHalf) {
   }
 
   const headers = lines[0].split('\t').map(h => h.trim().toLowerCase());
-  const sizeIdx = headers.findIndex(h => h === 'size');
+  let sizeIdx = headers.findIndex(h => h === 'size');
+  // Fall back to first column when its header is empty (common in pasted spec sheets)
+  if (sizeIdx === -1 && headers[0] === '') sizeIdx = 0;
   if (sizeIdx === -1) {
     return { sizes: {}, errors: ['No "size" column found in header row.'] };
   }
