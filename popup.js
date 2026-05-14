@@ -236,7 +236,7 @@ function parseTabular(rawText, type, takeHalf) {
 
 // ─── Single-line parser (bag) ─────────────────────────────────────────────────
 
-const QUALIFIER_LABEL = /^approx\.?$/i;
+const QUALIFIER_LABEL = /^(?:approx\.?|size)$/i;
 
 function splitLine(line) {
   // Match label then optional-whitespace : whitespace then rest
@@ -390,6 +390,8 @@ function parseSingleLine(rawText, type, takeHalf) {
     }
     normalizeMeasurements(measurements, takeHalf);
     computeSleeve(measurements);
+
+    if (Object.keys(measurements).length === 0) continue;
 
     const config = TYPE_CONFIG[type];
     const missing = config.required.filter(k => !(k in measurements));
