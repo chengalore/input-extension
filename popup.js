@@ -66,6 +66,7 @@ const BAG_COLUMN_MAP = {
 const TOPS_COLUMN_MAP = {
   'length':           'height',
   'total length':     'height',
+  'back length':      'height',
   'shoulder width':   'shoulder',
   'shoulder':         'shoulder',
   'body width':       'bust',
@@ -336,9 +337,12 @@ function parseSegment(segment, type) {
     const s = segment.replace(/^[(（][^)）]*[)）]\s*/, '').trim();
     const sl = s.toLowerCase();
     const sortedKeys = Object.keys(TOPS_COLUMN_MAP).sort((a, b) => b.length - a.length);
-    const slStripped = sl.replace(/^\S+\s+/, '');
+    // Strip a known garment-type word prefix (e.g. "Dress", "Petticoat") but NOT
+    // directional words like "front"/"back" — those need explicit map entries.
+    const GARMENT_PREFIX = /^(?:dress|petticoat|blouse|shirt|jacket|coat|cape|sweater)\s+/i;
+    const sNoGarment = s.replace(GARMENT_PREFIX, '');
     const candidates = [{ sl, s }];
-    if (slStripped !== sl) candidates.push({ sl: slStripped, s: s.slice(s.indexOf(' ') + 1) });
+    if (sNoGarment !== s) candidates.push({ sl: sNoGarment.toLowerCase(), s: sNoGarment });
     for (const { sl: cSl, s: cS } of candidates) {
       for (const key of sortedKeys) {
         if (cSl.startsWith(key)) {
