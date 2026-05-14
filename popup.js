@@ -154,15 +154,24 @@ function extractNumbers(str) {
 }
 
 function parseTabular(rawText, type, takeHalf) {
-  const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
+  // Don't trim lines before splitting — preserves leading tabs that mark an empty size-column header
+  const lines = rawText.split('\n').filter(l => l.trim());
   if (lines.length < 2) {
     return { sizes: {}, errors: ['Need at least a header row and one data row.'] };
   }
 
   const headers = lines[0].split('\t').map(h => h.trim().toLowerCase());
   let sizeIdx = headers.findIndex(h => h === 'size');
-  // Fall back to first column when its header is empty (common in pasted spec sheets)
   if (sizeIdx === -1 && headers[0] === '') sizeIdx = 0;
+  if (sizeIdx === -1) {
+    // Data has one more column than headers → unlabelled size column at the start
+    // (leading tab was stripped by textarea trim before reaching here)
+    const firstDataCols = lines[1]?.split('\t') ?? [];
+    if (firstDataCols.length === headers.length + 1) {
+      headers.unshift('');
+      sizeIdx = 0;
+    }
+  }
   if (sizeIdx === -1) {
     return { sizes: {}, errors: ['No "size" column found in header row.'] };
   }
@@ -312,6 +321,23 @@ function parseSegment(segment, type) {
     }
   }
 
+  // Named tops measurements — e.g. "Shoulder width 52.5", "Bust 108 (body measurement 72-80)", "Length 69 (cm)"
+  // Strip a leading qualifier like "(approx.)" then match the longest TOPS_COLUMN_MAP key at the start.
+  if (TOPS_TYPES.has(type)) {
+    const s = segment.replace(/^\([^)]*\)\s*/, '').trim();
+    const sl = s.toLowerCase();
+    const sortedKeys = Object.keys(TOPS_COLUMN_MAP).sort((a, b) => b.length - a.length);
+    for (const key of sortedKeys) {
+      if (sl.startsWith(key)) {
+        const numMatch = s.slice(key.length).match(/\d+\.?\d*/);
+        if (numMatch) {
+          result[TOPS_COLUMN_MAP[key]] = parseFloat(numMatch[0]);
+          return result;
+        }
+      }
+    }
+  }
+
   return result;
 }
 
@@ -337,11 +363,13 @@ function parseSingleLine(rawText, type, takeHalf) {
       continue;
     }
     const [label, measurementStr] = split;
-    const segments = measurementStr.split('/').map(s => s.trim());
+    const segments = measurementStr.split(/[/,]/).map(s => s.trim()).filter(Boolean);
     const measurements = {};
     for (const seg of segments) {
       Object.assign(measurements, parseSegment(seg, type));
     }
+    normalizeMeasurements(measurements, takeHalf);
+    computeSleeve(measurements);
 
     const config = TYPE_CONFIG[type];
     const missing = config.required.filter(k => !(k in measurements));
@@ -609,8 +637,14 @@ function isTabularFormat(rawText) {
   return firstLine.startsWith('size\t') || firstLine === 'size';
 }
 
+function isSingleLineFormat(rawText) {
+  const firstLine = rawText.trim().split('\n')[0];
+  return !firstLine.includes('\t') && splitLine(firstLine) !== null;
+}
+
 function parse(rawText, type, takeHalf) {
   if (isGradedFormat(rawText)) return parseGraded(rawText, type, takeHalf);
+  if (isSingleLineFormat(rawText)) return parseSingleLine(rawText, type, takeHalf);
   if (TOPS_TYPES.has(type) || PANTS_TYPES.has(type) || isTabularFormat(rawText)) return parseTabular(rawText, type, takeHalf);
   return parseSingleLine(rawText, type, takeHalf);
 }
