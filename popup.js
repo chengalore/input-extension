@@ -329,18 +329,24 @@ function parseSegment(segment, type) {
     }
   }
 
-  // Named tops measurements — e.g. "Shoulder width 52.5", "Bust 108 (body measurement 72-80)", "Length 69 (cm)"
-  // Strip a leading qualifier like "(approx.)" then match the longest TOPS_COLUMN_MAP key at the start.
+  // Named tops measurements — e.g. "Shoulder width 52.5", "Dress Bust 106cm", "Length 69 (cm)"
+  // Strip leading "(qualifier)" then try direct key match; if that fails, strip one leading word
+  // (e.g. "Dress" / "Petticoat") and retry — longest key wins to avoid "sleeve" beating "sleeve length".
   if (TOPS_TYPES.has(type)) {
     const s = segment.replace(/^[(（][^)）]*[)）]\s*/, '').trim();
     const sl = s.toLowerCase();
     const sortedKeys = Object.keys(TOPS_COLUMN_MAP).sort((a, b) => b.length - a.length);
-    for (const key of sortedKeys) {
-      if (sl.startsWith(key)) {
-        const numMatch = s.slice(key.length).match(/\d+\.?\d*/);
-        if (numMatch) {
-          result[TOPS_COLUMN_MAP[key]] = parseFloat(numMatch[0]);
-          return result;
+    const slStripped = sl.replace(/^\S+\s+/, '');
+    const candidates = [{ sl, s }];
+    if (slStripped !== sl) candidates.push({ sl: slStripped, s: s.slice(s.indexOf(' ') + 1) });
+    for (const { sl: cSl, s: cS } of candidates) {
+      for (const key of sortedKeys) {
+        if (cSl.startsWith(key)) {
+          const numMatch = cS.slice(key.length).match(/\d+\.?\d*/);
+          if (numMatch) {
+            result[TOPS_COLUMN_MAP[key]] = parseFloat(numMatch[0]);
+            return result;
+          }
         }
       }
     }
@@ -374,7 +380,9 @@ function parseSingleLine(rawText, type, takeHalf) {
     const segments = measurementStr.split(/[/,、]/).map(s => s.trim()).filter(Boolean);
     const measurements = {};
     for (const seg of segments) {
-      Object.assign(measurements, parseSegment(seg, type));
+      for (const [k, v] of Object.entries(parseSegment(seg, type))) {
+        if (!(k in measurements)) measurements[k] = v;
+      }
     }
     normalizeMeasurements(measurements, takeHalf);
     computeSleeve(measurements);
