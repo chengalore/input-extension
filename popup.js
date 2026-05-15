@@ -43,23 +43,29 @@ const TYPE_CONFIG = {
     required: ['height', 'bust'],
     optional: ['waist', 'hem', 'armOpening'],
   },
+  skirt: {
+    required: ['height', 'waist'],
+    optional: ['hip', 'hem'],
+  },
   pants: {
     required: ['inseam', 'waist', 'hip', 'thigh'],
     optional: ['knee', 'legOpening', 'frontRise', 'backRise'],
   },
 };
 
-const TOPS_TYPES  = new Set(['shirt', 'tShirt', 'jacket', 'coat', 'dress', 'dressALine', 'tunicSleeve', 'sweater',  'top']);
+const TOPS_TYPES  = new Set(['shirt', 'tShirt', 'jacket', 'coat', 'dress', 'dressALine', 'tunicSleeve', 'sweater', 'top', 'skirt']);
 const PANTS_TYPES = new Set(['pants']);
 
 // Column header (lowercase) → output field name, for bags
 const BAG_COLUMN_MAP = {
-  'width':    'width',
-  'height':   'height',
-  'depth':    'depth',
-  'machi':    'depth',   // Japanese term for gusset/depth
-  'thickness':'depth',
-  'length':   'height',
+  'width':      'width',
+  'beside':     'width',
+  'height':     'height',
+  'vertical':   'height',
+  'depth':      'depth',
+  'machi':      'depth',
+  'thickness':  'depth',
+  'length':     'height',
 };
 
 // Column header (lowercase) → output field name, for tops
@@ -73,7 +79,9 @@ const TOPS_COLUMN_MAP = {
   'chest width':      'bust',
   'chest':            'bust',
   'bust':             'bust',
+  'bust size':        'bust',
   'bust width':       'bust',
+  'width':            'bust',
   'sleeve length':        'sleeve_length',
   'sleeve':               'sleeve',
   'raglan sleeve':        '_raglanSleeve',
@@ -81,6 +89,8 @@ const TOPS_COLUMN_MAP = {
   'neck width':           '_neckWidth',
   'waist':            'waist',
   'waist width':      'waist',
+  'hip':              'hip',
+  'hips':             'hip',
   'hem':              'hem',
   'hem width':        'hem',
   'bicep':            'bicep',
@@ -105,16 +115,25 @@ const HIP_PRIORITY = ['hip$low', 'hip$high'];
 
 // Column header (lowercase) → output field name, for pants (tabular format)
 const PANTS_COLUMN_MAP = {
-  'waist':            'waist',
-  'waist relaxed':    'waist',
-  'hip':              'hip',
-  'thigh':            'thigh',
-  'inseam':           'inseam',
-  'knee':             'knee',
-  'leg opening':      'legOpening',
-  'leg bottom width': 'legOpening',
-  'front rise':       'frontRise',
-  'back rise':        'backRise',
+  'waist':             'waist',
+  'waist relaxed':     'waist',
+  'waist (elastic)':   'waist',
+  'waist elastic':     'waist',
+  'suitable waist':    'waist',
+  'hip':               'hip',
+  'hips':              'hip',
+  'suitable hip':      'hip',
+  'suitable hips':     'hip',
+  'thigh':             'thigh',
+  'watari':            'thigh',
+  'inseam':            'inseam',
+  'knee':              'knee',
+  'leg opening':       'legOpening',
+  'leg bottom width':  'legOpening',
+  'hem width':         'legOpening',
+  'rise':              'frontRise',
+  'front rise':        'frontRise',
+  'back rise':         'backRise',
 };
 
 // ─── Measurement normalization ────────────────────────────────────────────────
@@ -170,6 +189,11 @@ function parseTabular(rawText, type, takeHalf) {
   }
 
   const headers = lines[0].split('\t').map(h => h.trim().toLowerCase());
+
+  const colMap = TOPS_TYPES.has(type)  ? TOPS_COLUMN_MAP
+               : PANTS_TYPES.has(type) ? PANTS_COLUMN_MAP
+               : BAG_COLUMN_MAP;
+
   let sizeIdx = headers.findIndex(h => h === 'size');
   if (sizeIdx === -1 && headers[0] === '') sizeIdx = 0;
   if (sizeIdx === -1) {
@@ -181,25 +205,71 @@ function parseTabular(rawText, type, takeHalf) {
       sizeIdx = 0;
     }
   }
+  // Last fallback: if first header isn't a known measurement field, treat it as the size column.
+  // Covers labels like "Main unit", "Item", "No.", etc.
+  if (sizeIdx === -1 && !colMap[headers[0]]) sizeIdx = 0;
   if (sizeIdx === -1) {
     return { sizes: {}, errors: ['No "size" column found in header row.'] };
   }
 
-  const colMap = TOPS_TYPES.has(type)  ? TOPS_COLUMN_MAP
-               : PANTS_TYPES.has(type) ? PANTS_COLUMN_MAP
-               : BAG_COLUMN_MAP;
-
   // Map each column index to its output field name.
-  // Strip a leading "(Garment) " prefix so "(Blouse) Bust" → "bust" etc.
+  // Strip a leading "(Garment) " or "[Variant] " prefix so "(Blouse) Bust" / "[IND] Bust" → "bust" etc.
   const indexToField = {};
   headers.forEach((h, i) => {
     if (i === sizeIdx) return;
-    const field = colMap[h] ?? colMap[h.replace(/^\([^)]+\)\s*/, '')];
+    const stripped = h.replace(/^(?:\([^)]+\)|\[[^\]]+\])\s*/, '');
+    const field = colMap[h] ?? colMap[stripped];
     if (field && !(i in indexToField)) indexToField[i] = field;
   });
 
+  // Paired-column format: sizes encoded as suffixes in column headers,
+  // e.g. "Length S | M | Bust size S | M | Sleeve length S | M"
+  // A standalone size-code column (like "M") inherits the field from the previous
+  // "{field} S" column. Only triggered when normal column mapping found nothing.
+  const SIZE_CODE_RE = /^(xs|s|m|l|xl|2xl|xxl|3xl|\d+)$/i;
+  const FIELD_SIZE_RE = /^(.+?)\s+(xs|s|m|l|xl|2xl|xxl|3xl|\d+)$/i;
+  const indexToFieldSize = {};
+  if (Object.keys(indexToField).length === 0) {
+    let lastField = null;
+    headers.forEach((h, i) => {
+      if (i === sizeIdx) return;
+      const fsm = h.match(FIELD_SIZE_RE);
+      if (fsm) {
+        const fp = fsm[1].trim();
+        const sz = fsm[2].toUpperCase();
+        const field = colMap[fp] ?? colMap[fp.replace(/^(?:\([^)]+\)|\[[^\]]+\])\s*/, '')];
+        if (field) { indexToFieldSize[i] = { field, size: sz }; lastField = field; }
+      } else if (SIZE_CODE_RE.test(h) && lastField) {
+        indexToFieldSize[i] = { field: lastField, size: h.toUpperCase() };
+      }
+    });
+  }
+
   const sizes = {};
   const errors = [];
+  const multiRow = lines.length > 2;
+
+  if (Object.keys(indexToFieldSize).length > 0) {
+    // Paired-column: each size suffix gets its own output entry
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split('\t').map(c => c.trim());
+      const rowLabel = cols[sizeIdx];
+      if (!rowLabel) continue;
+      for (const [idxStr, { field, size }] of Object.entries(indexToFieldSize)) {
+        const sizeLabel = multiRow ? `${rowLabel}/${size}` : size;
+        if (!sizes[sizeLabel]) sizes[sizeLabel] = {};
+        const nums = extractNumbers(cols[Number(idxStr)] ?? '');
+        if (nums.length > 0 && !(field in sizes[sizeLabel])) sizes[sizeLabel][field] = nums[0];
+      }
+    }
+    for (const [sizeLabel, measurements] of Object.entries(sizes)) {
+      normalizeMeasurements(measurements, takeHalf);
+      computeSleeve(measurements);
+      const missing = TYPE_CONFIG[type].required.filter(k => !(k in measurements));
+      if (missing.length) errors.push(`"${sizeLabel}" is missing required fields: ${missing.join(', ')}`);
+    }
+    return { sizes, errors };
+  }
 
   for (let i = 1; i < lines.length; i++) {
     const cols = lines[i].split('\t').map(c => c.trim());
@@ -219,7 +289,6 @@ function parseTabular(rawText, type, takeHalf) {
     }
 
     normalizeMeasurements(measurements, takeHalf);
-
     computeSleeve(measurements);
 
     const config = TYPE_CONFIG[type];
@@ -356,31 +425,85 @@ function parseSegment(segment, type) {
     }
   }
 
+  // Named pants measurements — e.g. "Suitable waist 58-64cm", "inseam 68cm", "hem width 16.5cm"
+  if (PANTS_TYPES.has(type)) {
+    const s = segment.replace(/^[(（][^)）]*[)）]\s*/, '').trim();
+    const sl = s.toLowerCase();
+    const sortedKeys = Object.keys(PANTS_COLUMN_MAP).sort((a, b) => b.length - a.length);
+    for (const key of sortedKeys) {
+      if (sl.startsWith(key)) {
+        const numMatch = s.slice(key.length).match(/\d+\.?\d*/);
+        if (numMatch) {
+          result[PANTS_COLUMN_MAP[key]] = parseFloat(numMatch[0]);
+          return result;
+        }
+      }
+    }
+  }
+
   return result;
 }
 
 function parseSingleLine(rawText, type, takeHalf) {
-  const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
+  const lines = joinContinuationLines(rawText).filter(l => l.trim());
   const sizes = {};
   const errors = [];
+
+  // Column map used to detect when a line's label is itself a field name
+  // (e.g. "F\nHeight: 30cm, Width: 42.5cm" — "Height" is a bag field, "F" is the size label).
+  const colMap = type === 'bag' ? BAG_COLUMN_MAP
+               : TOPS_TYPES.has(type) ? TOPS_COLUMN_MAP
+               : PANTS_TYPES.has(type) ? PANTS_COLUMN_MAP
+               : null;
+
+  let pendingLabel = null;
+
+  const storeMeasurements = (sizeLabel, measurements) => {
+    normalizeMeasurements(measurements, takeHalf);
+    computeSleeve(measurements);
+    if (Object.keys(measurements).length === 0) return;
+    const missing = TYPE_CONFIG[type].required.filter(k => !(k in measurements));
+    if (missing.length) errors.push(`"${sizeLabel}" is missing required fields: ${missing.join(', ')}`);
+    sizes[sizeLabel] = measurements;
+  };
 
   for (const line of lines) {
     let split = splitLine(line);
     if (!split) {
-      // No "label : measurements" colon — try parsing the whole line as ONE SIZE
+      // No colon — try parsing as bare measurements (e.g. a dimension string)
       const segments = line.split('/').map(s => s.trim());
       const bare = {};
       for (const seg of segments) Object.assign(bare, parseSegment(seg, type));
       if (Object.keys(bare).length > 0) {
-        const missing = TYPE_CONFIG[type].required.filter(k => !(k in bare));
-        if (missing.length) errors.push(`"ONE SIZE" is missing required fields: ${missing.join(', ')}`);
-        sizes['ONE SIZE'] = bare;
+        const sizeLabel = pendingLabel ?? 'ONE SIZE';
+        pendingLabel = null;
+        storeMeasurements(sizeLabel, bare);
       } else {
-        errors.push(`Could not parse line: "${line}"`);
+        // No measurements — treat as a size label for the next line
+        pendingLabel = line;
       }
       continue;
     }
+
     const [label, measurementStr] = split;
+
+    // If a pending size label exists and this line's own label is a known field
+    // name, the whole line is "Field: val, Field: val, ..." and pendingLabel is the size.
+    if (pendingLabel && colMap && label.toLowerCase() in colMap) {
+      const sizeLabel = pendingLabel;
+      pendingLabel = null;
+      const segments = line.split(/[,、]/).map(s => s.trim()).filter(Boolean);
+      const measurements = {};
+      for (const seg of segments) {
+        for (const [k, v] of Object.entries(parseSegment(seg, type))) {
+          if (!(k in measurements)) measurements[k] = v;
+        }
+      }
+      storeMeasurements(sizeLabel, measurements);
+      continue;
+    }
+
+    pendingLabel = null;
     const segments = measurementStr.split(/[/,、]/).map(s => s.trim()).filter(Boolean);
     const measurements = {};
     for (const seg of segments) {
@@ -388,18 +511,7 @@ function parseSingleLine(rawText, type, takeHalf) {
         if (!(k in measurements)) measurements[k] = v;
       }
     }
-    normalizeMeasurements(measurements, takeHalf);
-    computeSleeve(measurements);
-
-    if (Object.keys(measurements).length === 0) continue;
-
-    const config = TYPE_CONFIG[type];
-    const missing = config.required.filter(k => !(k in measurements));
-    if (missing.length > 0) {
-      errors.push(`"${label}" is missing required fields: ${missing.join(', ')}`);
-    }
-
-    sizes[label] = measurements;
+    storeMeasurements(label, measurements);
   }
 
   return { sizes, errors };
@@ -664,8 +776,168 @@ function isSingleLineFormat(rawText) {
   return !firstLine.includes('\t') && splitLine(firstLine) !== null;
 }
 
+// Field-per-line format: each line is "FieldName: value1/value2/..."
+// Detected when the first line's label is a known output field for the current type.
+function isFieldValueFormat(rawText, type) {
+  const firstLine = rawText.trim().split('\n')[0];
+  const split = splitLine(firstLine);
+  if (!split) return false;
+  const [label] = split;
+  const colMap = type === 'bag' ? BAG_COLUMN_MAP
+               : TOPS_TYPES.has(type) ? TOPS_COLUMN_MAP
+               : PANTS_TYPES.has(type) ? PANTS_COLUMN_MAP
+               : null;
+  return colMap ? label.toLowerCase() in colMap : false;
+}
+
+function parseFieldValueLines(rawText, type, takeHalf) {
+  const colMap = type === 'bag' ? BAG_COLUMN_MAP
+               : TOPS_TYPES.has(type) ? TOPS_COLUMN_MAP
+               : PANTS_TYPES.has(type) ? PANTS_COLUMN_MAP
+               : null;
+  if (!colMap) return { sizes: {}, errors: [] };
+
+  const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
+  const fieldRows = [];
+  const errors = [];
+
+  for (const line of lines) {
+    const split = splitLine(line);
+    if (!split) continue;
+    const [label, valueStr] = split;
+    const field = colMap[label.toLowerCase()];
+    if (!field) continue;
+    const values = valueStr.split('/').map(s => {
+      const m = s.match(/\d+\.?\d*/);
+      return m ? parseFloat(m[0]) : null;
+    }).filter(v => v !== null);
+    if (values.length > 0) fieldRows.push({ field, values });
+  }
+
+  const maxLen = Math.max(...fieldRows.map(r => r.values.length), 1);
+  const sizes = {};
+
+  for (let i = 0; i < maxLen; i++) {
+    const sizeLabel = maxLen === 1 ? 'ONE SIZE' : String(i + 1);
+    const measurements = {};
+    for (const { field, values } of fieldRows) {
+      measurements[field] = values[Math.min(i, values.length - 1)];
+    }
+    normalizeMeasurements(measurements, takeHalf);
+    if (Object.keys(measurements).length > 0) {
+      const missing = TYPE_CONFIG[type].required.filter(k => !(k in measurements));
+      if (missing.length) errors.push(`"${sizeLabel}" is missing required fields: ${missing.join(', ')}`);
+      sizes[sizeLabel] = measurements;
+    }
+  }
+
+  return { sizes, errors };
+}
+
+function isBlockFormat(rawText) {
+  return /^\[.+\]/m.test(rawText);
+}
+
+// Join lines starting with ':' or ',' onto the previous line (handles mid-field line breaks).
+function joinContinuationLines(rawText) {
+  const lines = rawText.split('\n');
+  const out = [];
+  for (const line of lines) {
+    const t = line.trim();
+    if (!t) { out.push(''); continue; }
+    if ((t[0] === ':' || t[0] === ',') && out.length > 0) {
+      out[out.length - 1] = out[out.length - 1].trimEnd() + t;
+    } else {
+      out.push(t);
+    }
+  }
+  return out;
+}
+
+function parseBlockFormat(rawText, type, takeHalf) {
+  const colMap = TOPS_TYPES.has(type) ? TOPS_COLUMN_MAP
+               : PANTS_TYPES.has(type) ? PANTS_COLUMN_MAP
+               : null;
+  if (!colMap) return { sizes: {}, errors: ['Block format not supported for this type.'] };
+
+  const lines = joinContinuationLines(rawText);
+  const sizes = {};
+  const errors = [];
+  let currentSize = null;
+  let allSections = {};   // section name (lowercase) → { field: value }
+  let currentSection = '_default';
+  const typeSection = type.toLowerCase();
+
+  const parseFieldStr = (str) => {
+    const m = str.match(/^(.+?)\s*[:：]\s*(.+)$/);
+    if (!m) return null;
+    const keyStr = m[1].trim().toLowerCase();
+    const valStr = m[2].trim();
+    const field = colMap[keyStr];
+    if (!field) return null;
+    const numMatch = valStr.match(/\d+\.?\d*/);
+    return numMatch ? [field, parseFloat(numMatch[0])] : null;
+  };
+
+  const flushSize = () => {
+    if (!currentSize) return;
+    const preferred = allSections[typeSection];
+    const sourceSections = preferred ? [preferred] : Object.values(allSections);
+    const measurements = {};
+    for (const sec of sourceSections) {
+      for (const [k, v] of Object.entries(sec)) {
+        if (!(k in measurements)) measurements[k] = v;
+      }
+    }
+    normalizeMeasurements(measurements, takeHalf);
+    computeSleeve(measurements);
+    if (Object.keys(measurements).length > 0) {
+      const config = TYPE_CONFIG[type];
+      const missing = config.required.filter(k => !(k in measurements));
+      if (missing.length) errors.push(`"${currentSize}" is missing required fields: ${missing.join(', ')}`);
+      sizes[currentSize] = measurements;
+    }
+    allSections = {};
+    currentSection = '_default';
+  };
+
+  for (const line of lines) {
+    if (!line) continue;
+
+    const sizeMatch = line.match(/^\[(.+)\]$/);
+    if (sizeMatch) {
+      flushSize();
+      currentSize = sizeMatch[1].replace(/^size\s+/i, '').trim();
+      continue;
+    }
+
+    const sectionMatch = line.match(/^\(([^)]+)\)$/);
+    if (sectionMatch) {
+      currentSection = sectionMatch[1].toLowerCase();
+      if (!allSections[currentSection]) allSections[currentSection] = {};
+      continue;
+    }
+
+    if (!currentSize) continue;
+    if (!allSections[currentSection]) allSections[currentSection] = {};
+
+    for (const part of line.split(',').map(s => s.trim()).filter(Boolean)) {
+      const parsed = parseFieldStr(part);
+      if (parsed) {
+        const [k, v] = parsed;
+        if (!(k in allSections[currentSection])) allSections[currentSection][k] = v;
+      }
+    }
+  }
+
+  flushSize();
+  return { sizes, errors };
+}
+
 function parse(rawText, type, takeHalf) {
+  if (isBlockFormat(rawText)) return parseBlockFormat(rawText, type, takeHalf);
   if (isGradedFormat(rawText)) return parseGraded(rawText, type, takeHalf);
+  if (isFieldValueFormat(rawText, type)) return parseFieldValueLines(rawText, type, takeHalf);
   if (isSingleLineFormat(rawText)) return parseSingleLine(rawText, type, takeHalf);
   if (TOPS_TYPES.has(type) || PANTS_TYPES.has(type) || isTabularFormat(rawText)) return parseTabular(rawText, type, takeHalf);
   return parseSingleLine(rawText, type, takeHalf);
