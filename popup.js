@@ -457,6 +457,7 @@ function parseSingleLine(rawText, type, takeHalf) {
                : null;
 
   let pendingLabel = null;
+  let lastSizeLabel = null;
 
   const storeMeasurements = (sizeLabel, measurements) => {
     normalizeMeasurements(measurements, takeHalf);
@@ -465,6 +466,7 @@ function parseSingleLine(rawText, type, takeHalf) {
     const missing = TYPE_CONFIG[type].required.filter(k => !(k in measurements));
     if (missing.length) errors.push(`"${sizeLabel}" is missing required fields: ${missing.join(', ')}`);
     sizes[sizeLabel] = measurements;
+    lastSizeLabel = sizeLabel;
   };
 
   for (const line of lines) {
@@ -503,6 +505,19 @@ function parseSingleLine(rawText, type, takeHalf) {
       continue;
     }
 
+    // If the label is a known field name with no pending label, this is a stray
+    // continuation line (e.g. "Waist: 63cm" after a line that ended with a comma).
+    // Merge it into the last size rather than creating a bogus "Waist" size entry.
+    if (!pendingLabel && colMap && label.toLowerCase() in colMap && lastSizeLabel) {
+      const segments = line.split(/[,、]/).map(s => s.trim()).filter(Boolean);
+      for (const seg of segments) {
+        for (const [k, v] of Object.entries(parseSegment(seg, type))) {
+          if (!(k in sizes[lastSizeLabel])) sizes[lastSizeLabel][k] = v;
+        }
+      }
+      continue;
+    }
+
     pendingLabel = null;
     const segments = measurementStr.split(/[/,、]/).map(s => s.trim()).filter(Boolean);
     const measurements = {};
@@ -521,7 +536,7 @@ function parseSingleLine(rawText, type, takeHalf) {
 
 // Height priority tags — resolved after all rows are processed
 // Priority: HPS+CB > HPS > CB > CF > other
-const HEIGHT_PRIORITY = ['height$hps_cb', 'height$hps', 'height$full', 'height$cb', 'height$cf', 'height$other'];
+const HEIGHT_PRIORITY = ['height$hps_cb', 'height$cf', 'height$cb', 'height$hps', 'height$full', 'height$other'];
 
 // Map description + alt-description → output field. Order matters: specific first.
 function matchGradedField(desc, altDesc = '', type = '') {
@@ -535,12 +550,13 @@ function matchGradedField(desc, altDesc = '', type = '') {
   if (/\bneck\s*(width|opening)\b/.test(d)) return '_neckWidth';
 
   // Tops: sleeve
-  if (/sleeve length from (shoulder|shoulder seam)/.test(d)) return 'sleeve_length';
+  if (/sleeve.*from.*\bshoulder\b/.test(d)) return 'sleeve_length';
   if (/sleeve length from (cb|centre back|center back)/.test(d)) return 'sleeve';
-  if (/(across shoulder|shoulder across|shoulder width)/.test(d)) return 'shoulder';
+  if (/(across shoulder|shoulder across|shoulder width|shoulder to shoulder)/.test(d)) return 'shoulder';
   if (/(chest|bust)/.test(d) && !/pocket/.test(d)) return 'bust';
   if (/(bicep|upper sleeve width)/.test(d)) return 'bicep';
   if (/(arm\s*(hole|opening)|armhole)/.test(d)) return 'armOpening';
+  if (/\bhem\b/.test(d) && !/finished|position|length/.test(d)) return 'hem';
 
   // Hip (and seat as synonym) — checked BEFORE waist because descriptions like
   // "High Hip @ below waist edge" contain "waist" as a reference point
@@ -558,8 +574,8 @@ function matchGradedField(desc, altDesc = '', type = '') {
   }
 
   // Pants circumferences — check before generic hem to avoid legOpening → hem
-  if (/\bthigh\b/.test(d)) return 'thigh';
-  if (/\bknee\b/.test(d)) return 'knee';
+  if (/\bthigh\b/.test(d) && !/length/.test(d)) return 'thigh';
+  if (/\bknee\b/.test(d) && !/length/.test(d)) return 'knee';
   if (/(leg\s*(bottom|opening))/.test(d)) return 'legOpening';
 
   // Bottom width — leg opening for pants, hem for tops
@@ -569,7 +585,7 @@ function matchGradedField(desc, altDesc = '', type = '') {
 
   // Pants lengths
   if (/\boutseam\b/.test(d)) return null;
-  if (/\b(inseam|inleg)\b/.test(d)) {
+  if (/\b(inseam|inleg|inside\s+leg)\b/.test(d)) {
     // Tag with the inch length when present (e.g. "Inseam 28"" → _inseamLen_28)
     const lenMatch = d.match(/(\d+)/);
     return lenMatch ? `_inseamLen_${lenMatch[1]}` : 'inseam';
@@ -772,7 +788,8 @@ function isTabularFormat(rawText) {
 }
 
 function isSingleLineFormat(rawText) {
-  const firstLine = rawText.trim().split('\n')[0];
+  // Apply continuation-line joining first so "Size F\n: Length: ..." is seen as one line.
+  const firstLine = (joinContinuationLines(rawText).find(l => l.trim()) ?? '');
   return !firstLine.includes('\t') && splitLine(firstLine) !== null;
 }
 
