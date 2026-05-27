@@ -73,6 +73,7 @@ const TOPS_COLUMN_MAP = {
   'length':           'height',
   'total length':     'height',
   'back length':      'height',
+  'body length':      'height',
   'shoulder width':   'shoulder',
   'shoulder':         'shoulder',
   'body width':       'bust',
@@ -105,6 +106,17 @@ const TOPS_COLUMN_MAP = {
   '着丈':  'height',
   'ウエスト': 'waist',
   '裾幅':  'hem',
+  // Korean field names
+  '앞총장': 'height',
+  '뒤총장': 'height',
+  '어깨너비': 'shoulder',
+  '소매길이': 'sleeve_length',
+  '래글런 소매길이': '_raglanSleeve',
+  '소매통': 'bicep',
+  '가슴둘레': 'bust',
+  '허리둘레': 'waist',
+  '밑단둘레': 'hem',
+  '힙둘레': 'hip',
 };
 
 // Waist priority: relaxed > stretched > generic
@@ -183,9 +195,29 @@ function extractNumbers(str) {
 
 function parseTabular(rawText, type, takeHalf) {
   // Don't trim lines before splitting — preserves leading tabs that mark an empty size-column header
-  const lines = rawText.split('\n').filter(l => l.trim());
+  let lines = rawText.split('\n').filter(l => l.trim());
   if (lines.length < 2) {
     return { sizes: {}, errors: ['Need at least a header row and one data row.'] };
+  }
+
+  // Repair rows split by unquoted multiline cells, e.g. a cell containing "110cm\n43.3inch"
+  // produces: "FREE SIZE(03)\t110cm" then "43.3inch\t55cm" then "21.7inch\t51cm" etc.
+  // A continuation line is detected when its first cell looks like a measurement value.
+  const MEASUREMENT_LEAD_RE = /^\d+\.?\d*\s*(cm|inch|mm|in)\b/i;
+  if (lines.slice(1).some(l => MEASUREMENT_LEAD_RE.test(l.split('\t')[0] ?? ''))) {
+    const repaired = [];
+    let pending = null;
+    for (const rawLine of lines) {
+      const cols = rawLine.split('\t').map(c => c.trim());
+      if (pending !== null && MEASUREMENT_LEAD_RE.test(cols[0] ?? '')) {
+        pending.push(...cols.slice(1)); // discard inch alt, append remaining values
+      } else {
+        if (pending !== null) repaired.push(pending.join('\t'));
+        pending = [...cols];
+      }
+    }
+    if (pending !== null) repaired.push(pending.join('\t'));
+    lines = repaired;
   }
 
   const headers = lines[0].split('\t').map(h => h.trim().toLowerCase());
@@ -253,7 +285,7 @@ function parseTabular(rawText, type, takeHalf) {
     // Paired-column: each size suffix gets its own output entry
     for (let i = 1; i < lines.length; i++) {
       const cols = lines[i].split('\t').map(c => c.trim());
-      const rowLabel = cols[sizeIdx];
+      const rowLabel = normalizeLabel(cols[sizeIdx] ?? '');
       if (!rowLabel) continue;
       for (const [idxStr, { field, size }] of Object.entries(indexToFieldSize)) {
         const sizeLabel = multiRow ? `${rowLabel}/${size}` : size;
@@ -271,9 +303,39 @@ function parseTabular(rawText, type, takeHalf) {
     return { sizes, errors };
   }
 
+  // Transposed table: field names in col 0, size labels in header row cols 1..n.
+  // Detected when indexToField and indexToFieldSize are both empty (the header's non-size
+  // columns are numeric size codes, not field names) but data rows' col 0 values are known fields.
+  if (Object.keys(indexToField).length === 0 && Object.keys(indexToFieldSize).length === 0) {
+    const transposedFields = [];
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split('\t').map(c => c.trim());
+      const field = colMap[(cols[0] ?? '').toLowerCase()];
+      if (field) transposedFields.push({ field, values: cols.slice(1) });
+    }
+    if (transposedFields.length > 0) {
+      const sizeLabels = headers.slice(1).map(h => normalizeLabel(h));
+      for (const label of sizeLabels) if (label) sizes[label] = {};
+      for (const { field, values } of transposedFields) {
+        sizeLabels.forEach((label, si) => {
+          if (!label) return;
+          const val = parseFloat((values[si] ?? '').replace(',', '.'));
+          if (!isNaN(val) && !(field in sizes[label])) sizes[label][field] = val;
+        });
+      }
+      for (const [sizeLabel, measurements] of Object.entries(sizes)) {
+        normalizeMeasurements(measurements, takeHalf);
+        computeSleeve(measurements);
+        const missing = TYPE_CONFIG[type].required.filter(k => !(k in measurements));
+        if (missing.length) errors.push(`"${sizeLabel}" is missing required fields: ${missing.join(', ')}`);
+      }
+      return { sizes, errors };
+    }
+  }
+
   for (let i = 1; i < lines.length; i++) {
     const cols = lines[i].split('\t').map(c => c.trim());
-    const sizeLabel = cols[sizeIdx];
+    const sizeLabel = normalizeLabel(cols[sizeIdx] ?? '');
     if (!sizeLabel) continue;
 
     const measurements = {};
@@ -307,14 +369,22 @@ function parseTabular(rawText, type, takeHalf) {
 
 const QUALIFIER_LABEL = /^(?:approx\.?|size)$/i;
 
+function normalizeLabel(raw) {
+  // Strip "Size " / "size " prefix — e.g. "Size S" → "S", "Size M" → "M"
+  const label = raw.trim().replace(/^size\s+/i, '') || raw.trim();
+  return QUALIFIER_LABEL.test(label) ? 'ONE SIZE' : label;
+}
+
 function splitLine(line) {
+  // "[label] measurement" — e.g. "[Size] H13cm x W15cm x D2cm"
+  const bracketM = line.match(/^\[([^\]]+)\]\s+(.+)$/);
+  if (bracketM) return [normalizeLabel(bracketM[1]), bracketM[2].trim()];
   // Match label then optional-whitespace : whitespace then rest
   // Handles ASCII ":" and fullwidth "："; space after colon is optional for Japanese text
   const m = line.match(/^(.+?)\s*[:：]\s*(.+)$/);
   if (!m) return null;
-  const label = m[1].trim();
   // Qualifiers like "Approx." are prefixes, not real size labels
-  return [QUALIFIER_LABEL.test(label) ? 'ONE SIZE' : label, m[2].trim()];
+  return [normalizeLabel(m[1]), m[2].trim()];
 }
 
 function parseSegment(segment, type) {
@@ -702,15 +772,29 @@ function parseGraded(rawText, type, takeHalf) {
   // Find alt-description column for incl./excl. WB annotations
   const descAltIdx = headers.findIndex(h => /description.*(alt|\(alt\))/i.test(h));
 
+  // Detect POM-format where data rows have one extra column (code + description + values)
+  // but the header only has code + size names (no description column header).
+  // In this case every size column index i maps to data column i+1.
+  let sizeDataOffset = 0;
+  for (let r = dataStartIdx; r < lines.length; r++) {
+    const testCols = lines[r].split('\t').map(c => c.trim());
+    if (testCols.filter(c => c).length <= 1) continue; // skip blank/section-title rows
+    if (testCols.length === headers.length + 1 &&
+        isNaN(parseFloat((testCols[1] ?? '').replace(',', '.')))) {
+      sizeDataOffset = 1;
+    }
+    break;
+  }
+
   // Size columns: any non-empty header that isn't the POM/code, description,
   // alt-description, or tolerance column. Handles numeric (32, W24) and text (XS, S/XS) sizes.
   const sizeCols = headers.reduce((acc, h, i) => {
     if (i === 0) return acc;                              // skip POM/code column
-    if (i === descIdx) return acc;                        // skip description column
+    if (sizeDataOffset === 0 && i === descIdx) return acc; // skip description column (normal format)
     if (descAltIdx >= 0 && i === descAltIdx) return acc; // skip alt description
     if (!h || /^tol/i.test(h) || !/[A-Za-z0-9]/.test(h)) return acc; // skip empty/tol/symbols
-    // Skip columns whose header looks like a code or description label, not a size
-    if (/^(pom|code|ref|dim|desc|meas|point)/i.test(h)) return acc;
+    // Skip columns whose header looks like a metadata label, not a size
+    if (/^(pom|code|ref|dim|desc|meas|point|translat|hide|note|comment|colour|color|gender|season|fabric)/i.test(h)) return acc;
     const num = h.match(/^[Ww]?(\d+)$/);
     acc.push({ i, size: num ? num[1] : h });
     return acc;
@@ -723,13 +807,13 @@ function parseGraded(rawText, type, takeHalf) {
 
   for (let r = dataStartIdx; r < lines.length; r++) {
     const cols = lines[r].split('\t').map(c => c.trim());
-    const desc    = cols[descIdx] ?? '';
-    const altDesc = descAltIdx >= 0 ? (cols[descAltIdx] ?? '') : '';
+    const desc    = sizeDataOffset > 0 ? (cols[1] ?? '') : (cols[descIdx] ?? '');
+    const altDesc = descAltIdx >= 0 ? (cols[descAltIdx + sizeDataOffset] ?? '') : '';
     const field = matchGradedField(desc, altDesc, type);
     if (!field) continue;
 
     for (const { i, size } of sizeCols) {
-      const val = parseFloat((cols[i] ?? '').replace(',', '.'));
+      const val = parseFloat((cols[i + sizeDataOffset] ?? '').replace(',', '.'));
       if (!isNaN(val) && !(field in sizes[size])) {
         sizes[size][field] = val;
       }
@@ -852,7 +936,8 @@ function parseFieldValueLines(rawText, type, takeHalf) {
 }
 
 function isBlockFormat(rawText) {
-  return /^\[.+\]/m.test(rawText);
+  // Only treat as block if [label] appears on a line by itself (no measurement content after it)
+  return /^\[.+\]\s*$/m.test(rawText);
 }
 
 // Join lines starting with ':' or ',' onto the previous line (handles mid-field line breaks).
