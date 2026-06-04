@@ -1134,6 +1134,7 @@ function toOutputTable(sizes, type) {
 const parseBtn  = document.getElementById('parse-btn');
 const halfBtn   = document.getElementById('half-btn');
 const yukiBtn   = document.getElementById('yuki-btn');
+const sleeveBtn = document.getElementById('sleeve-btn');
 const tableBtn  = document.getElementById('table-btn');
 const copyBtn   = document.getElementById('copy-btn');
 const inputText = document.getElementById('input-text');
@@ -1154,6 +1155,16 @@ yukiBtn.addEventListener('click', () => {
   yukiBtn.classList.toggle('active', yukiAsSleeve);
   TOPS_COLUMN_MAP['yuki']     = yukiAsSleeve ? 'sleeve' : 'sleeve_length';
   TOPS_COLUMN_MAP['yukitake'] = yukiAsSleeve ? 'sleeve' : 'sleeve_length';
+});
+
+let sleeveAsArm = false;
+sleeveBtn.addEventListener('click', () => {
+  sleeveAsArm = !sleeveAsArm;
+  sleeveBtn.classList.toggle('active', sleeveAsArm);
+  const sleeveTarget = sleeveAsArm ? 'sleeve' : 'sleeve_length';
+  for (const key of ['sleeve length', '袖丈', '소매길이']) {
+    TOPS_COLUMN_MAP[key] = sleeveTarget;
+  }
 });
 
 let tableMode = false;
