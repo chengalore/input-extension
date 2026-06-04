@@ -65,6 +65,7 @@ const BAG_COLUMN_MAP = {
   'depth':      'depth',
   'machi':      'depth',
   'thickness':  'depth',
+  'town':       'depth',  // English translation of Japanese "machi" (gusset/depth)
   'length':     'height',
 };
 
@@ -84,6 +85,8 @@ const TOPS_COLUMN_MAP = {
   'bust width':       'bust',
   'width':            'bust',
   'sleeve length':        'sleeve_length',
+  'yuki':                 'sleeve_length',
+  'yukitake':             'sleeve_length',
   'sleeve':               'sleeve',
   'raglan sleeve':        '_raglanSleeve',
   'raglan sleeve length': '_raglanSleeve',
@@ -189,8 +192,24 @@ function normalizeMeasurements(measurements, takeHalf) {
 
 // ─── Tabular parser (shirt / tShirt / jacket / coat) ─────────────────────────
 
+const TEXT_NUMS = {
+  zero:0,one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,
+  ten:10,eleven:11,twelve:12,thirteen:13,fourteen:14,fifteen:15,
+  sixteen:16,seventeen:17,eighteen:18,nineteen:19,
+  twenty:20,thirty:30,forty:40,fifty:50,sixty:60,seventy:70,eighty:80,ninety:90,
+};
+
+function parseTextNumber(str) {
+  const words = str.trim().toLowerCase().split(/[\s-]+/);
+  if (words.length === 0 || words.some(w => !(w in TEXT_NUMS))) return null;
+  return words.reduce((sum, w) => sum + TEXT_NUMS[w], 0) || null;
+}
+
 function extractNumbers(str) {
-  return [...str.matchAll(/[\d.]+/g)].map(m => parseFloat(m[0]));
+  const digits = [...str.matchAll(/[\d.]+/g)].map(m => parseFloat(m[0]));
+  if (digits.length > 0) return digits;
+  const t = parseTextNumber(str);
+  return t !== null ? [t] : [];
 }
 
 function parseTabular(rawText, type, takeHalf) {
@@ -249,7 +268,8 @@ function parseTabular(rawText, type, takeHalf) {
   const indexToField = {};
   headers.forEach((h, i) => {
     if (i === sizeIdx) return;
-    const stripped = h.replace(/^(?:\([^)]+\)|\[[^\]]+\])\s*/, '');
+    const stripped = h.replace(/^(?:\([^)]+\)|\[[^\]]+\])\s*/, '')  // strip leading qualifier
+                      .replace(/\s*\([^)]+\)$/, '').trim();          // strip trailing qualifier
     const field = colMap[h] ?? colMap[stripped];
     if (field && !(i in indexToField)) indexToField[i] = field;
   });
@@ -307,11 +327,46 @@ function parseTabular(rawText, type, takeHalf) {
   // Detected when indexToField and indexToFieldSize are both empty (the header's non-size
   // columns are numeric size codes, not field names) but data rows' col 0 values are known fields.
   if (Object.keys(indexToField).length === 0 && Object.keys(indexToFieldSize).length === 0) {
+    // Preamble format: header row is just "size" alone (no field columns), the next
+    // single-column line(s) are the size label, and the actual field table follows.
+    // e.g. "size\nFREE\nheight\tWidth (bottom)\ttown\n15.5\ttwenty four\t8"
+    if (headers.length === 1 && sizeIdx === 0) {
+      const innerHeaderIdx = lines.findIndex((l, i) => i > 0 && l.includes('\t'));
+      if (innerHeaderIdx > 0 && innerHeaderIdx + 1 < lines.length) {
+        const preambleLabel = normalizeLabel(lines.slice(1, innerHeaderIdx).join(' ').trim());
+        const innerHeaders = lines[innerHeaderIdx].split('\t').map(h => h.trim().toLowerCase());
+        const innerIndexToField = {};
+        innerHeaders.forEach((h, i) => {
+          const stripped = h.replace(/\s*\([^)]+\)$/, '').trim();
+          const f = colMap[h] ?? colMap[stripped];
+          if (f) innerIndexToField[i] = f;
+        });
+        if (Object.keys(innerIndexToField).length > 0) {
+          for (let i = innerHeaderIdx + 1; i < lines.length; i++) {
+            const cols = lines[i].split('\t').map(c => c.trim());
+            const measurements = {};
+            for (const [idxStr, field] of Object.entries(innerIndexToField)) {
+              const nums = extractNumbers(cols[Number(idxStr)] ?? '');
+              if (nums.length > 0 && !(field in measurements)) measurements[field] = nums[0];
+            }
+            normalizeMeasurements(measurements, takeHalf);
+            computeSleeve(measurements);
+            const missing = TYPE_CONFIG[type].required.filter(k => !(k in measurements));
+            if (missing.length) errors.push(`"${preambleLabel}" is missing required fields: ${missing.join(', ')}`);
+            if (Object.keys(measurements).length > 0) sizes[preambleLabel] = measurements;
+          }
+          return { sizes, errors };
+        }
+      }
+    }
+
     const transposedFields = [];
     for (let i = 1; i < lines.length; i++) {
       const cols = lines[i].split('\t').map(c => c.trim());
-      const field = colMap[(cols[0] ?? '').toLowerCase()];
-      if (field) transposedFields.push({ field, values: cols.slice(1) });
+      const raw = (cols[0] ?? '').toLowerCase();
+      const field = colMap[raw] ?? colMap[raw.replace(/\s*\([^)]+\)$/, '').trim()];
+      const hasNumericValue = cols.slice(1).some(c => extractNumbers(c).length > 0);
+      if (field && hasNumericValue) transposedFields.push({ field, values: cols.slice(1) });
     }
     if (transposedFields.length > 0) {
       const sizeLabels = headers.slice(1).map(h => normalizeLabel(h));
