@@ -105,6 +105,7 @@ const TOPS_COLUMN_MAP = {
   '肩巾':  'shoulder',
   '肩幅':  'shoulder',
   'バスト': 'bust',
+  '身幅':   'bust',
   '袖丈':  'sleeve_length',
   '着丈':  'height',
   'ウエスト': 'waist',
