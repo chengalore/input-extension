@@ -1124,6 +1124,7 @@ function toOutputTable(sizes, type) {
 
 const parseBtn  = document.getElementById('parse-btn');
 const halfBtn   = document.getElementById('half-btn');
+const yukiBtn   = document.getElementById('yuki-btn');
 const tableBtn  = document.getElementById('table-btn');
 const copyBtn   = document.getElementById('copy-btn');
 const inputText = document.getElementById('input-text');
@@ -1136,6 +1137,14 @@ let takeHalf = false;
 halfBtn.addEventListener('click', () => {
   takeHalf = !takeHalf;
   halfBtn.classList.toggle('active', takeHalf);
+});
+
+let yukiAsSleeve = false;
+yukiBtn.addEventListener('click', () => {
+  yukiAsSleeve = !yukiAsSleeve;
+  yukiBtn.classList.toggle('active', yukiAsSleeve);
+  TOPS_COLUMN_MAP['yuki']     = yukiAsSleeve ? 'sleeve' : 'sleeve_length';
+  TOPS_COLUMN_MAP['yukitake'] = yukiAsSleeve ? 'sleeve' : 'sleeve_length';
 });
 
 let tableMode = false;
