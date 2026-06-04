@@ -67,6 +67,12 @@ const BAG_COLUMN_MAP = {
   'thickness':  'depth',
   'town':       'depth',  // English translation of Japanese "machi" (gusset/depth)
   'length':     'height',
+  // Japanese bag field names
+  '横':    'width',
+  '幅':    'width',
+  '高さ':  'height',
+  '奥行':  'depth',
+  '奥行き': 'depth',
 };
 
 // Column header (lowercase) → output field name, for tops
