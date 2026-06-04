@@ -1103,7 +1103,9 @@ function parse(rawText, type, takeHalf) {
   if (isGradedFormat(rawText)) return parseGraded(rawText, type, takeHalf);
   if (isFieldValueFormat(rawText, type)) return parseFieldValueLines(rawText, type, takeHalf);
   if (isSingleLineFormat(rawText)) return parseSingleLine(rawText, type, takeHalf);
-  if (TOPS_TYPES.has(type) || PANTS_TYPES.has(type) || isTabularFormat(rawText)) return parseTabular(rawText, type, takeHalf);
+  const firstLine = rawText.trim().split('\n')[0];
+  const bagTabular = type === 'bag' && firstLine.includes('\t') && !firstLine.includes(':');
+  if (TOPS_TYPES.has(type) || PANTS_TYPES.has(type) || isTabularFormat(rawText) || bagTabular) return parseTabular(rawText, type, takeHalf);
   return parseSingleLine(rawText, type, takeHalf);
 }
 
