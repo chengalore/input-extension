@@ -684,11 +684,13 @@ function matchGradedField(desc, altDesc = '', type = '') {
   // Tops: sleeve
   if (/sleeve.*from.*\bshoulder\b/.test(d)) return 'sleeve_length';
   if (/sleeve length from (cb|centre back|center back)/.test(d)) return 'sleeve';
+  // Plain "sleeve length" with no from-qualifier — respect the Sleeve=arm toggle
+  if (/\bsleeve\b.*\blength\b/.test(d) && !/from/.test(d)) return TOPS_COLUMN_MAP['sleeve length'] ?? 'sleeve_length';
   if (/(across shoulder|shoulder across|shoulder width|shoulder to shoulder)/.test(d)) return 'shoulder';
   if (/(chest|bust)/.test(d) && !/pocket/.test(d)) return 'bust';
   if (/(bicep|upper sleeve width)/.test(d)) return 'bicep';
   if (/(arm\s*(hole|opening)|armhole)/.test(d)) return 'armOpening';
-  if (/\bhem\b/.test(d) && !/finished|position|length/.test(d)) return 'hem';
+  if ((/\bhem\b/.test(d) || (/\bbottom\b/.test(d) && !/width/.test(d))) && !/finished|position|length/.test(d)) return 'hem';
 
   // Hip (and seat as synonym) — checked BEFORE waist because descriptions like
   // "High Hip @ below waist edge" contain "waist" as a reference point
@@ -739,6 +741,7 @@ function matchGradedField(desc, altDesc = '', type = '') {
   }
 
   // Height — tag by reference for priority resolution (not used for pants)
+  if (!PANTS_TYPES.has(type) && /\bcbl\b/.test(d)) return 'height$cb'; // Center Back Length abbreviation
   if (!PANTS_TYPES.has(type) && /length/.test(d)) {
     const hasHps = /from (hps|highest point shoulder)/.test(d);
     const hasCb  = /(cb|centre back|center back|\bback\b)/.test(d);
@@ -813,14 +816,25 @@ function parseGraded(rawText, type, takeHalf) {
   const lines = normalizeQuotedTSV(rawText).split('\n').map(l => l.trim()).filter(Boolean);
   if (lines.length < 2) return { sizes: {}, errors: ['Need header + data rows.'] };
 
-  // Skip title rows — find the first line that looks like a spec header
+  // Skip title rows — find the first line that looks like a spec header.
+  // Keyword matches (code, dim, pom, etc.) take priority over bare-numeric matches
+  // so a product-info line like "Brand\tStyle\t115169" doesn't win over "Code\tPoint of measure\tW24".
   let headerLineIdx = 0;
+  let numericFallbackIdx = -1;
   for (let i = 0; i < Math.min(3, lines.length); i++) {
     const cols = lines[i].split('\t').map(h => h.trim());
-    if (cols.some(h => /^[Ww]?\d+$/.test(h) || /^(description|pom|measuring|point\s*of\s*measure|code|dim|ref)/i.test(h))) {
+    if (cols.some(h => /^(description|pom|measuring|point\s*of\s*measure|code|dim|ref)/i.test(h))) {
       headerLineIdx = i;
+      numericFallbackIdx = -1; // keyword wins, discard any numeric candidate
       break;
     }
+    if (numericFallbackIdx === -1 && cols.some(h => /^[Ww]?\d+$/.test(h))) {
+      numericFallbackIdx = i;
+    }
+  }
+  if (numericFallbackIdx !== -1 && headerLineIdx === 0 &&
+      !lines[0].split('\t').some(h => /^(description|pom|measuring|point\s*of\s*measure|code|dim|ref)/i.test(h.trim()))) {
+    headerLineIdx = numericFallbackIdx;
   }
   const headers = lines[headerLineIdx].split('\t').map(h => h.trim());
   const dataStartIdx = headerLineIdx + 1;
