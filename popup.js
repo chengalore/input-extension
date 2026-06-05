@@ -41,7 +41,7 @@ const TYPE_CONFIG = {
   },
   top: {
     required: ['height', 'bust'],
-    optional: ['waist', 'hem', 'armOpening'],
+    optional: ['waist', 'hem', 'armOpening', 'shoulder'],
   },
   skirt: {
     required: ['height', 'waist'],
