@@ -706,8 +706,8 @@ function matchGradedField(desc, altDesc = '', type = '') {
   }
 
   // Pants circumferences — check before generic hem to avoid legOpening → hem
-  if (/\bthigh\b/.test(d) && !/length/.test(d)) return 'thigh';
-  if (/\bknee\b/.test(d) && !/length/.test(d)) return 'knee';
+  if (/\bthigh\b/.test(d) && !/length|position/.test(d)) return 'thigh';
+  if (/\bknee\b/.test(d) && !/length|position/.test(d)) return 'knee';
   if (/(leg\s*(bottom|opening))/.test(d)) return 'legOpening';
 
   // Bottom width — leg opening for pants, hem for tops
@@ -738,8 +738,8 @@ function matchGradedField(desc, altDesc = '', type = '') {
     return inclWB ? 'backRise$incl' : 'backRise$excl';
   }
 
-  // Height — tag by reference for priority resolution
-  if (/length/.test(d)) {
+  // Height — tag by reference for priority resolution (not used for pants)
+  if (!PANTS_TYPES.has(type) && /length/.test(d)) {
     const hasHps = /from (hps|highest point shoulder)/.test(d);
     const hasCb  = /(cb|centre back|center back|\bback\b)/.test(d);
     const hasCf  = /(cf|centre front|center front|\bfront\b)/.test(d);
@@ -761,7 +761,10 @@ const RISE_TAGS = ['frontRise$incl', 'frontRise$excl', 'backRise$incl', 'backRis
 // RFC 4180: "" inside a quoted cell is an escaped quote.
 function normalizeQuotedTSV(text) {
   return text.replace(/(^|\t)"((?:[^"]|"")*)"/gm, (_, prefix, inner) => {
-    return prefix + (inner.replace(/""/g, '"').split('\n').map(s => s.trim()).find(Boolean) ?? '');
+    const lines = inner.replace(/""/g, '"').split('\n').map(s => s.trim()).filter(Boolean);
+    // Use the last non-empty line — for multi-row size-label cells like "XL/L\nXL"
+    // the last line is the specific size code; for single-line cells this is unchanged.
+    return prefix + (lines.at(-1) ?? '');
   });
 }
 
@@ -828,7 +831,15 @@ function parseGraded(rawText, type, takeHalf) {
       /^description$/i.test(h) || /^pom\s*name$/i.test(h) ||
       /^measuring\s*point$/i.test(h) || /^point\s*of\s*measure$/i.test(h)
     );
-    return i !== -1 ? i : 1;
+    if (i !== -1) return i;
+    // If col 1 is a translation column, col 0 contains the English descriptions
+    if (headers.length > 1 && /^translation$/i.test(headers[1])) return 0;
+    // If col 0 is "POM" and col 1 is a size code (simple or compound like XXS/XXXS),
+    // col 0 is the description column
+    const SIZE_UNIT = '(?:xxxs|xxs|xs|s|m|l|xl|2xl|xxl|3xl|xxxl|\\d+)';
+    const SIZE_COL_RE = new RegExp(`^${SIZE_UNIT}(?:/${SIZE_UNIT})*$`, 'i');
+    if (/^pom$/i.test(headers[0]) && headers.length > 1 && SIZE_COL_RE.test(headers[1])) return 0;
+    return 1;
   })();
 
   // Find alt-description column for incl./excl. WB annotations
@@ -919,6 +930,92 @@ function parseGraded(rawText, type, takeHalf) {
 }
 
 // ─── Main parse entry point ───────────────────────────────────────────────────
+
+// ─── Space-separated graded parser (web-UI copy with no tab separators) ─────────
+// Format: "Dim Description Description (Alt) Hide Tol (-) Tol" header (no tabs),
+// then a line of space-separated size labels, then POM description line(s), then
+// one data line per measurement with alt-desc + tolerances + values (European decimals).
+
+function isSpaceSeparatedGradedFormat(rawText) {
+  const first3 = rawText.trim().split('\n').slice(0, 3);
+  return first3.some(l => !l.includes('\t') && /\bdim\b/i.test(l) && /\bdescription\b/i.test(l));
+}
+
+function parseSpaceSeparatedGraded(rawText, type, takeHalf) {
+  const lines = rawText.trim().split('\n').map(l => l.trim()).filter(Boolean);
+  const sizes = {};
+  const errors = [];
+
+  // Find the size-label line: all space-separated tokens are recognized size codes
+  const SIZE_TOKEN_RE = /^(xxs|xs|s|m|l|xl|2xl|3xl|xxl|\d+)$/i;
+  let sizeLabels = [];
+  for (const line of lines) {
+    const tokens = line.split(/\s+/);
+    if (tokens.length >= 2 && tokens.every(t => SIZE_TOKEN_RE.test(t))) {
+      sizeLabels = tokens.map(t => t.toUpperCase());
+      break;
+    }
+  }
+  if (sizeLabels.length === 0) return { sizes: {}, errors: ['Could not find size labels.'] };
+  const nSizes = sizeLabels.length;
+  for (const s of sizeLabels) sizes[s] = {};
+
+  // Parse POM description lines: lines that have POM codes (e.g. BW005) but no
+  // comma-decimal numbers. Extract descriptions in encounter order.
+  const POM_CODE_TEST = /[A-Z]{1,3}\d{3,}/;
+  const POM_EXTRACT = /([A-Z]{1,3}\d{3,})\s+(.+?)(?=\s+[A-Z]{1,3}\d{3,}|\s+(?:CORE|OTHER)\s+MEASUREMENTS|$)/g;
+  const orderedDescriptions = [];
+  for (let line of lines) {
+    if (!POM_CODE_TEST.test(line) || /\d,\d/.test(line)) continue;
+    line = line.split(/\s+Displaying\s+\d/)[0]; // strip pagination text
+    POM_EXTRACT.lastIndex = 0;
+    let m;
+    while ((m = POM_EXTRACT.exec(line)) !== null) {
+      const desc = m[2].trim();
+      if (desc) orderedDescriptions.push(desc);
+    }
+  }
+
+  // Find data lines: lines with ≥ nSizes comma-decimal numbers (European format)
+  const COMMA_NUM = /[-]?\d+,\d+/g;
+  const dataLines = [];
+  for (const line of lines) {
+    const nums = [...line.matchAll(COMMA_NUM)].map(m => parseFloat(m[0].replace(',', '.')));
+    if (nums.length >= nSizes) dataLines.push(nums);
+  }
+
+  // Match data lines to descriptions by index; take last nSizes values per row
+  for (let i = 0; i < Math.min(dataLines.length, orderedDescriptions.length); i++) {
+    const field = matchGradedField(orderedDescriptions[i], '', type);
+    if (!field) continue;
+    const values = dataLines[i].slice(-nSizes);
+    values.forEach((val, si) => {
+      const label = sizeLabels[si];
+      if (!isNaN(val) && !(field in sizes[label])) sizes[label][field] = val;
+    });
+  }
+
+  // Same normalization as parseGraded
+  for (const m of Object.values(sizes)) {
+    for (const key of WAIST_PRIORITY) { if (key in m) { m.waist = m[key]; break; } }
+    for (const key of WAIST_PRIORITY) delete m[key];
+    for (const key of HIP_PRIORITY) { if (key in m) { m.hip = m[key]; break; } }
+    for (const key of HIP_PRIORITY) delete m[key];
+    normalizeMeasurements(m, takeHalf);
+    const wb = m._waistband ?? 0;
+    delete m._waistband;
+    if ('frontRise$incl' in m) m.frontRise = m['frontRise$incl'];
+    else if ('frontRise$excl' in m) m.frontRise = m['frontRise$excl'] + wb;
+    if ('backRise$incl' in m)  m.backRise  = m['backRise$incl'];
+    else if ('backRise$excl' in m)  m.backRise  = m['backRise$excl'] + wb;
+    for (const key of RISE_TAGS) delete m[key];
+    for (const key of HEIGHT_PRIORITY) { if (key in m) { m.height = m[key]; break; } }
+    for (const key of HEIGHT_PRIORITY) delete m[key];
+    computeSleeve(m);
+  }
+
+  return { sizes: expandInseamCombinations(sizes), errors };
+}
 
 function isGradedFormat(rawText) {
   const lines = normalizeQuotedTSV(rawText).trim().split('\n').slice(0, 3).map(l => l.toLowerCase().trim());
@@ -1100,6 +1197,7 @@ function parseBlockFormat(rawText, type, takeHalf) {
 
 function parse(rawText, type, takeHalf) {
   if (isBlockFormat(rawText)) return parseBlockFormat(rawText, type, takeHalf);
+  if (isSpaceSeparatedGradedFormat(rawText)) return parseSpaceSeparatedGraded(rawText, type, takeHalf);
   if (isGradedFormat(rawText)) return parseGraded(rawText, type, takeHalf);
   if (isFieldValueFormat(rawText, type)) return parseFieldValueLines(rawText, type, takeHalf);
   if (isSingleLineFormat(rawText)) return parseSingleLine(rawText, type, takeHalf);
