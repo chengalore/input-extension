@@ -95,6 +95,8 @@ const TOPS_COLUMN_MAP = {
   'sleeve length':        'sleeve_length',
   'yuki':                 'sleeve_length',
   'yukitake':             'sleeve_length',
+  'ゆき':                 'sleeve_length',
+  'ゆき丈':              'sleeve_length',
   'sleeve':               'sleeve',
   'raglan sleeve':        '_raglanSleeve',
   'raglan sleeve length': '_raglanSleeve',
@@ -117,6 +119,7 @@ const TOPS_COLUMN_MAP = {
   '身幅':   'bust',
   '袖丈':  'sleeve_length',
   '着丈':  'height',
+  '身丈':  'height',
   'ウエスト': 'waist',
   '裾幅':  'hem',
   // Korean field names
@@ -646,7 +649,7 @@ function parseSingleLine(rawText, type, takeHalf) {
     if (pendingLabel && colMap && label.toLowerCase() in colMap) {
       const sizeLabel = pendingLabel;
       pendingLabel = null;
-      const segments = line.split(/[,、]/).map(s => s.trim()).filter(Boolean);
+      const segments = line.split(/[,、/]/).map(s => s.trim()).filter(Boolean);
       const measurements = {};
       for (const seg of segments) {
         for (const [k, v] of Object.entries(parseSegment(seg, type))) {
@@ -1288,7 +1291,8 @@ function parse(rawText, type, takeHalf) {
   if (isSingleLineFormat(rawText)) return parseSingleLine(rawText, type, takeHalf);
   const firstLine = rawText.trim().split('\n')[0];
   const bagTabular = type === 'bag' && firstLine.includes('\t') && !firstLine.includes(':');
-  if (TOPS_TYPES.has(type) || PANTS_TYPES.has(type) || isTabularFormat(rawText) || bagTabular) return parseTabular(rawText, type, takeHalf);
+  const hasTabular = (TOPS_TYPES.has(type) || PANTS_TYPES.has(type)) && (rawText.includes('\t') || isTabularFormat(rawText));
+  if (hasTabular || isTabularFormat(rawText) || bagTabular) return parseTabular(rawText, type, takeHalf);
   return parseSingleLine(rawText, type, takeHalf);
 }
 
@@ -1338,6 +1342,8 @@ yukiBtn.addEventListener('click', () => {
   yukiBtn.classList.toggle('active', yukiAsSleeve);
   TOPS_COLUMN_MAP['yuki']     = yukiAsSleeve ? 'sleeve' : 'sleeve_length';
   TOPS_COLUMN_MAP['yukitake'] = yukiAsSleeve ? 'sleeve' : 'sleeve_length';
+  TOPS_COLUMN_MAP['ゆき']    = yukiAsSleeve ? 'sleeve' : 'sleeve_length';
+  TOPS_COLUMN_MAP['ゆき丈']  = yukiAsSleeve ? 'sleeve' : 'sleeve_length';
 });
 
 let sleeveAsArm = false;
