@@ -78,6 +78,7 @@ const BAG_COLUMN_MAP = {
 // Column header (lowercase) → output field name, for tops
 const TOPS_COLUMN_MAP = {
   'length':           'height',
+  'total':            'height',
   'total length':     'height',
   'back length':      'height',
   'body length':      'height',
@@ -103,6 +104,7 @@ const TOPS_COLUMN_MAP = {
   'hips':             'hip',
   'hem':              'hem',
   'hem width':        'hem',
+  'sleeve width':     'bicep',
   'bicep':            'bicep',
   'arm opening':      'armOpening',
   'armhole':          'armOpening',
@@ -481,6 +483,21 @@ function parseSegment(segment, type) {
     return result;
   }
 
+  // Named bag dimensions — handles optional qualifier in parens:
+  // "Width (bottom): 29cm", "depth 8.0cm x width 35.0cm x height 14.5cm"
+  if (type === 'bag') {
+    const NAMED_BAG_RE = /(depth|width|height|length)\s*(?:\([^)]*\))?\s*:?\s*([\d.]+)/gi;
+    const namedBagMatches = [...segment.matchAll(NAMED_BAG_RE)];
+    if (namedBagMatches.length >= 1) {
+      const NAME_MAP = { depth: 'depth', width: 'width', height: 'height', length: 'height' };
+      for (const [, name, num] of namedBagMatches) {
+        const field = NAME_MAP[name.toLowerCase()];
+        if (field && !(field in result)) result[field] = parseFloat(num);
+      }
+      return result;
+    }
+  }
+
   // Named single dimensions — colon is optional ("Width 22cm" or "Width: 22cm")
   // Anchored to segment start to avoid partial matches ("Shoulder strap length", etc.)
   const named = [
@@ -513,7 +530,9 @@ function parseSegment(segment, type) {
         return result;
       }
     }
-    const letterPrefixDims = [...segment.matchAll(/\b([WHDLwhdl])(\d+\.?\d*)\s*cm\b/g)];
+    // Normalize "cmxH" / "cm×H" → "cm H" so \b works across the separator
+    const normSeg = segment.replace(/cm\s*[xX×]\s*(?=[WHDLwhdl])/gi, 'cm ');
+    const letterPrefixDims = [...normSeg.matchAll(/\b([WHDLwhdl])(\d+\.?\d*)\s*cm\b/g)];
     if (letterPrefixDims.length > 0) {
       for (const [, letter, num] of letterPrefixDims) {
         const field = LETTER_MAP[letter.toLowerCase()];
@@ -1209,7 +1228,58 @@ function parseBlockFormat(rawText, type, takeHalf) {
   return { sizes, errors };
 }
 
+// Detect web-table copy where every cell lands on its own line.
+// Supports both blank-line-separated (double \n) and single-newline variants.
+// e.g. "Size / Cm\n\nTotal\n\nChest\n\nS\n\n50\n\n74\n\n..."
+// e.g. "size\nLength\nshoulder width\nF (One Size Fits All)\n58\n75\n..."
+function isLinearizedTableFormat(rawText) {
+  if (rawText.includes('\t')) return false;
+  const sep = rawText.includes('\n\n') ? /\n\n+/ : /\n/;
+  const cells = rawText.split(sep).map(c => c.trim()).filter(Boolean);
+  if (cells.length < 6) return false;
+  if (!cells.slice(0, 2).every(c => !/^\d+\.?\d*$/.test(c))) return false;
+  return _linearColCount(cells) > 0;
+}
+
+// Returns true for values that can be the first cell of a data row (a size label).
+// Deliberately conservative: keeps field names like "Length", "Yuki", "Sleeve Width" out.
+function _isSizeLabel(c) {
+  if (!c || /^[-–—]+$/.test(c)) return false;
+  if (/^\d+(?:[/.]\d+)*$/.test(c)) return true;                // pure number: 0, 1, 36, 36/32
+  if (/^(?:x{0,4}s|s|m|l|x{1,5}l|\d+xl?)$/i.test(c)) return true;  // XS S M L XL XXL 2XL …
+  if (/^(?:free(?:\s*size)?|one\s*size)$/i.test(c)) return true;     // FREE FREE SIZE ONE SIZE
+  if (/^[a-z](?:\s*\([^)]*\))?$/i.test(c)) return true;             // single letter + optional "(qualifier)"
+  if (/^[a-z0-9]{2,4}(?:\/[a-z0-9]{1,4})+$/i.test(c)) return true; // S/M M/L XL/XXL 24/28
+  return false;
+}
+
+function _linearColCount(cells) {
+  for (let colCount = 2; colCount <= 10 && colCount < cells.length; colCount++) {
+    let valid = true;
+    for (let i = colCount; i < cells.length; i += colCount) {
+      if (!_isSizeLabel(cells[i])) { valid = false; break; }
+    }
+    // Require at least one digit-containing value in the first data row
+    if (valid && cells.slice(colCount, 2 * colCount).some(c => /\d/.test(c))) return colCount;
+  }
+  return -1;
+}
+
+// Reshape linearized cells into a TSV string using the detected column count.
+function delinearizeTable(rawText) {
+  const sep = rawText.includes('\n\n') ? /\n\n+/ : /\n/;
+  const cells = rawText.split(sep).map(c => c.trim()).filter(Boolean);
+  const colCount = _linearColCount(cells);
+  if (colCount < 0) return rawText;
+  const rows = [];
+  for (let i = 0; i < cells.length; i += colCount) {
+    rows.push(cells.slice(i, i + colCount).join('\t'));
+  }
+  return rows.join('\n');
+}
+
 function parse(rawText, type, takeHalf) {
+  if (isLinearizedTableFormat(rawText)) rawText = delinearizeTable(rawText);
   if (isBlockFormat(rawText)) return parseBlockFormat(rawText, type, takeHalf);
   if (isSpaceSeparatedGradedFormat(rawText)) return parseSpaceSeparatedGraded(rawText, type, takeHalf);
   if (isGradedFormat(rawText)) return parseGraded(rawText, type, takeHalf);
