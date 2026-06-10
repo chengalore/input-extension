@@ -77,6 +77,7 @@ const BAG_COLUMN_MAP = {
 
 // Column header (lowercase) → output field name, for tops
 const TOPS_COLUMN_MAP = {
+  'height':           'height',
   'length':           'height',
   'total':            'height',
   'total length':     'height',
