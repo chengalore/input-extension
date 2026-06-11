@@ -73,6 +73,7 @@ const BAG_COLUMN_MAP = {
   '高さ':  'height',
   '奥行':  'depth',
   '奥行き': 'depth',
+  'まち':  'depth',  // hiragana for machi (gusset)
 };
 
 // Column header (lowercase) → output field name, for tops
@@ -162,6 +163,15 @@ const PANTS_COLUMN_MAP = {
   'rise':              'frontRise',
   'front rise':        'frontRise',
   'back rise':         'backRise',
+  // Japanese pants field names (half-width katakana + kanji)
+  'ｳｴｽﾄ':             'waist',
+  'ｳｴｽﾄ（ﾇーﾄﾞ寸法）': 'waist',
+  'ｳｴｽﾄ（仕上り寸法）': 'waist',
+  'ﾋｯﾌﾟ':             'hip',
+  '股下':              'inseam',
+  '前股上':            'frontRise',
+  '渡り幅':            'thigh',
+  '裾幅':              'legOpening',
 };
 
 // ─── Measurement normalization ────────────────────────────────────────────────
@@ -281,8 +291,8 @@ function parseTabular(rawText, type, takeHalf) {
   const indexToField = {};
   headers.forEach((h, i) => {
     if (i === sizeIdx) return;
-    const stripped = h.replace(/^(?:\([^)]+\)|\[[^\]]+\])\s*/, '')  // strip leading qualifier
-                      .replace(/\s*\([^)]+\)$/, '').trim();          // strip trailing qualifier
+    const stripped = h.replace(/^(?:[(（][^)）]+[)）]|\[[^\]]+\])\s*/, '')  // strip leading qualifier
+                      .replace(/\s*[(（][^)）]+[)）]$/, '').trim();            // strip trailing qualifier (inc. full-width （）)
     const field = colMap[h] ?? colMap[stripped];
     if (field && !(i in indexToField)) indexToField[i] = field;
   });
@@ -451,6 +461,8 @@ function splitLine(line) {
   // Handles ASCII ":" and fullwidth "："; space after colon is optional for Japanese text
   const m = line.match(/^(.+?)\s*[:：]\s*(.+)$/);
   if (!m) return null;
+  // If the potential label contains a middle dot it's a field separator string, not a size label
+  if (m[1].includes('・')) return null;
   // Qualifiers like "Approx." are prefixes, not real size labels
   return [normalizeLabel(m[1]), m[2].trim()];
 }
@@ -596,6 +608,23 @@ function parseSegment(segment, type) {
     }
   }
 
+  // Named bag measurements via BAG_COLUMN_MAP startsWith — handles Japanese field names
+  // like "高さ40", "幅42", "まち2" (strips leading bullet/decoration chars like ■●◆).
+  if (type === 'bag') {
+    const s = segment.replace(/^[■●▪□◆◇・\s]+/, '').trim();
+    const sl = s.toLowerCase();
+    const sortedBagKeys = Object.keys(BAG_COLUMN_MAP).sort((a, b) => b.length - a.length);
+    for (const key of sortedBagKeys) {
+      if (sl.startsWith(key)) {
+        const numMatch = s.slice(key.length).match(/\d+\.?\d*/);
+        if (numMatch) {
+          if (!(BAG_COLUMN_MAP[key] in result)) result[BAG_COLUMN_MAP[key]] = parseFloat(numMatch[0]);
+          return result;
+        }
+      }
+    }
+  }
+
   return result;
 }
 
@@ -628,16 +657,25 @@ function parseSingleLine(rawText, type, takeHalf) {
     let split = splitLine(line);
     if (!split) {
       // No colon — try parsing as bare measurements (e.g. a dimension string)
-      const segments = line.split('/').map(s => s.trim());
+      const segments = line.split(/[/・]/).map(s => s.replace(/^[■●▪□◆◇]+/, '').trim()).filter(Boolean);
       const bare = {};
-      for (const seg of segments) Object.assign(bare, parseSegment(seg, type));
+      let potentialLabel = null;
+      for (let si = 0; si < segments.length; si++) {
+        const seg = segments[si];
+        const res = parseSegment(seg, type);
+        if (Object.keys(res).length > 0) {
+          Object.assign(bare, res);
+        } else if (si === 0 && !extractNumbers(seg).length) {
+          potentialLabel = seg;
+        }
+      }
       if (Object.keys(bare).length > 0) {
-        const sizeLabel = pendingLabel ?? 'ONE SIZE';
+        const sizeLabel = pendingLabel ?? potentialLabel ?? 'ONE SIZE';
         pendingLabel = null;
         storeMeasurements(sizeLabel, bare);
       } else {
         // No measurements — treat as a size label for the next line
-        pendingLabel = line;
+        pendingLabel = potentialLabel ?? line;
       }
       continue;
     }
@@ -674,7 +712,7 @@ function parseSingleLine(rawText, type, takeHalf) {
     }
 
     pendingLabel = null;
-    const segments = measurementStr.split(/[/,、]/).map(s => s.trim()).filter(Boolean);
+    const segments = measurementStr.split(/[/,、・]/).map(s => s.replace(/^[■●▪□◆◇]+/, '').trim()).filter(Boolean);
     const measurements = {};
     for (const seg of segments) {
       for (const [k, v] of Object.entries(parseSegment(seg, type))) {
@@ -1245,26 +1283,32 @@ function isLinearizedTableFormat(rawText) {
   return _linearColCount(cells) > 0;
 }
 
-// Returns true for values that can be the first cell of a data row (a size label).
-// Deliberately conservative: keeps field names like "Length", "Yuki", "Sleeve Width" out.
-function _isSizeLabel(c) {
-  if (!c || /^[-–—]+$/.test(c)) return false;
-  if (/^\d+(?:[/.]\d+)*$/.test(c)) return true;                // pure number: 0, 1, 36, 36/32
-  if (/^(?:x{0,4}s|s|m|l|x{1,5}l|\d+xl?)$/i.test(c)) return true;  // XS S M L XL XXL 2XL …
-  if (/^(?:free(?:\s*size)?|one\s*size)$/i.test(c)) return true;     // FREE FREE SIZE ONE SIZE
-  if (/^[a-z](?:\s*\([^)]*\))?$/i.test(c)) return true;             // single letter + optional "(qualifier)"
-  if (/^[a-z0-9]{2,4}(?:\/[a-z0-9]{1,4})+$/i.test(c)) return true; // S/M M/L XL/XXL 24/28
+// A row-start cell is invalid as a size label if it is a dash, a measurement with a unit,
+// or an all-CJK/Japanese/Korean string (those are field names, not size codes).
+// Cells that are alphanumeric product codes like "W28L32ｲﾝﾁ" pass because they contain ASCII.
+function _invalidSizeStart(c) {
+  if (!c || /^[-–—]+$/.test(c)) return true;
+  if (/^\d+\.?\d*\s*(cm|mm|in|inch|kg|g|lbs?)\b/i.test(c)) return true;
+  // All-CJK/kana/hangul — field names in Japanese/Korean tables
+  if (/^[　-鿿가-힯豈-﫿＀-￿\s（）「」！？、。・ー]+$/.test(c)) return true;
   return false;
 }
 
 function _linearColCount(cells) {
+  const isDecimal = s => /^\d+\.?\d*$/.test(s);
   for (let colCount = 2; colCount <= 10 && colCount < cells.length; colCount++) {
+    const rowStarts = [];
     let valid = true;
     for (let i = colCount; i < cells.length; i += colCount) {
-      if (!_isSizeLabel(cells[i])) { valid = false; break; }
+      if (_invalidSizeStart(cells[i])) { valid = false; break; }
+      rowStarts.push(cells[i]);
     }
-    // Require at least one digit-containing value in the first data row
-    if (valid && cells.slice(colCount, 2 * colCount).some(c => /\d/.test(c))) return colCount;
+    if (!valid) continue;
+    // Consistency: row starts must be all-numeric OR all-non-numeric, never mixed.
+    // Mixed means some are field values and some are size codes → wrong colCount.
+    const numCount = rowStarts.filter(c => isDecimal(c)).length;
+    if (numCount > 0 && numCount < rowStarts.length) continue;
+    if (rowStarts.length > 0 && cells.slice(colCount, 2 * colCount).some(c => /\d/.test(c))) return colCount;
   }
   return -1;
 }
