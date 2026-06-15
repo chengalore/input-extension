@@ -134,6 +134,14 @@ const TOPS_COLUMN_MAP = {
   '허리둘레': 'waist',
   '밑단둘레': 'hem',
   '힙둘레': 'hip',
+  // Spec-sheet / tech-pack verbose descriptions (e.g. Acne Studios)
+  'low hip':                'hip',
+  'low hip position':       'hip',
+  'bottom width':           'hem',
+  'skirt cf length':        'height',
+  'skirt cb length':        'height',
+  'skirt side seam length': 'height',
+  'skirt length':           'height',
 };
 
 // Waist priority: relaxed > stretched > generic
@@ -200,6 +208,7 @@ const TABLE_FIELD_ORDER = {
   dressALine:  ['height', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem'],
   tunicSleeve: ['height', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem'],
   top:         ['height', 'bust', 'waist', 'hem', 'armOpening'],
+  skirt:       ['height', 'waist', 'hip', 'hem'],
   pants:       ['inseam', 'waist', 'hip', 'thigh', 'knee', 'legOpening', 'frontRise', 'backRise'],
 };
 
@@ -211,6 +220,76 @@ function normalizeMeasurements(measurements, takeHalf) {
       measurements[field] = measurements[field] / 2;
     }
   }
+}
+
+// ─── Spec-sheet parser (brand tech-pack / grading table) ─────────────────────
+// Handles transposed tables where: rows = measurements, columns = sizes.
+// Detection: a line with >= 3 pure-integer tab cells, with "description" in a nearby preceding line.
+// The dim code (e.g. BW005) is col 0; the human description is col 1; size values are the last N cols.
+
+function tryParseSpecSheet(lines, type, takeHalf) {
+  let sizeLabelLineIdx = -1;
+  let sizeLabels = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const cells = lines[i].split('\t').map(c => c.trim());
+    const intCells = cells.filter(c => /^\d+$/.test(c));
+    if (intCells.length < 3) continue;
+    const windowStart = Math.max(0, i - 2);
+    const nearby = lines.slice(windowStart, i + 1);
+    const hasDesc = nearby.some(l =>
+      l.split('\t').map(c => c.trim().toLowerCase()).includes('description')
+    );
+    if (hasDesc) {
+      sizeLabelLineIdx = i;
+      sizeLabels = intCells;
+      break;
+    }
+  }
+  if (sizeLabelLineIdx < 0) return null;
+
+  const colMap = TOPS_TYPES.has(type) ? TOPS_COLUMN_MAP
+               : PANTS_TYPES.has(type) ? PANTS_COLUMN_MAP
+               : BAG_COLUMN_MAP;
+
+  const sizes = {};
+  const errors = [];
+  for (const s of sizeLabels) sizes[s] = {};
+  const numSizes = sizeLabels.length;
+
+  for (let i = sizeLabelLineIdx + 1; i < lines.length; i++) {
+    const cols = lines[i].split('\t').map(c => c.trim());
+    if (cols.length < numSizes + 1) continue;
+    const valueCells = cols.slice(cols.length - numSizes);
+    if (!valueCells.some(c => /\d/.test(c))) continue;
+
+    const desc = cols[1] ?? '';
+    const descNorm = desc.toLowerCase()
+      .replace(/\s*\*[^*]*\*/g, '')  // strip *BOTTOMS* style annotations
+      .replace(/\s*\([^)]*\)/g, '')  // strip (mini), (measured along hem), etc.
+      .trim();
+
+    const field = colMap[descNorm]
+      ?? colMap[descNorm.replace(/^(?:skirt|pant|pants|top|jacket|coat|dress)\s+/i, '').trim()]
+      ?? colMap[descNorm.replace(/\s+(?:cf|cb|side seam)\b.*/i, '').trim()];
+    if (!field) continue;
+
+    sizeLabels.forEach((size, si) => {
+      const val = parseFloat(valueCells[si].replace(',', '.'));
+      if (!isNaN(val) && !(field in sizes[size])) sizes[size][field] = val;
+    });
+  }
+
+  for (const [sizeLabel, measurements] of Object.entries(sizes)) {
+    if (Object.keys(measurements).length === 0) { delete sizes[sizeLabel]; continue; }
+    normalizeMeasurements(measurements, takeHalf);
+    computeSleeve(measurements);
+    const missing = TYPE_CONFIG[type].required.filter(k => !(k in measurements));
+    if (missing.length) errors.push(`"${sizeLabel}" is missing required fields: ${missing.join(', ')}`);
+  }
+
+  if (Object.keys(sizes).length === 0) return null;
+  return { sizes, errors };
 }
 
 // ─── Tabular parser (shirt / tShirt / jacket / coat) ─────────────────────────
@@ -261,6 +340,9 @@ function parseTabular(rawText, type, takeHalf) {
     if (pending !== null) repaired.push(pending.join('\t'));
     lines = repaired;
   }
+
+  const specResult = tryParseSpecSheet(lines, type, takeHalf);
+  if (specResult) return specResult;
 
   const headers = lines[0].split('\t').map(h => h.trim().toLowerCase());
 
