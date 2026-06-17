@@ -1,5 +1,4 @@
 'use strict';
-console.log('[popup.js] loaded – build 3');
 
 // ─── Type definitions ────────────────────────────────────────────────────────
 
@@ -275,7 +274,6 @@ function parseTSVLines(rawText) {
 
 function tryParsePomSheet(rows, type, takeHalf) {
   const pomRowIdx = rows.findIndex(r => (r[0] ?? '').trim().toUpperCase() === 'POM');
-  console.log('[POM] pomRowIdx:', pomRowIdx, 'rows[0][0]:', JSON.stringify((rows[0]??[])[0]));
   if (pomRowIdx < 0) return null;
 
   let headerRow = rows[pomRowIdx];
@@ -304,7 +302,6 @@ function tryParsePomSheet(rows, type, takeHalf) {
     return lines.find(l => l.includes('/')) ?? lines[0] ?? '';
   };
   const sizeLabels = headerRow.slice(1).map(s => pickLabel(s)).filter(Boolean);
-  console.log('[POM] sizeLabels:', sizeLabels);
   if (sizeLabels.length < 2) return null;
 
   const colMap = TOPS_TYPES.has(type) ? TOPS_COLUMN_MAP
@@ -466,7 +463,6 @@ function extractNumbers(str) {
 }
 
 function parseTabular(rawText, type, takeHalf) {
-  console.log('[parseTabular] called, rows:', parseTSVLines(rawText).length, 'row0[0]:', (parseTSVLines(rawText)[0]??[])[0]);
   // Parse TSV with quoted multi-line cells ("XS/XXS\nXXS" → 'XS/XXS')
   const tsvRows = parseTSVLines(rawText);
 
@@ -1569,16 +1565,18 @@ function delinearizeTable(rawText) {
 }
 
 function parse(rawText, type, takeHalf) {
-  if (isLinearizedTableFormat(rawText)) { console.log('[parse] delinearize'); rawText = delinearizeTable(rawText); }
-  if (isBlockFormat(rawText)) { console.log('[parse] → blockFormat'); return parseBlockFormat(rawText, type, takeHalf); }
-  if (isSpaceSeparatedGradedFormat(rawText)) { console.log('[parse] → spaceSeparatedGraded'); return parseSpaceSeparatedGraded(rawText, type, takeHalf); }
-  if (isGradedFormat(rawText)) { console.log('[parse] → graded'); return parseGraded(rawText, type, takeHalf); }
-  if (isFieldValueFormat(rawText, type)) { console.log('[parse] → fieldValue'); return parseFieldValueLines(rawText, type, takeHalf); }
-  if (isSingleLineFormat(rawText)) { console.log('[parse] → singleLine'); return parseSingleLine(rawText, type, takeHalf); }
+  // POM spec-sheet: any row starting with "POM\t" — must route to parseTabular before
+  // any other format detector (graded, field-value, etc.) can intercept it.
+  if (/^POM\t/m.test(rawText)) return parseTabular(rawText, type, takeHalf);
+  if (isLinearizedTableFormat(rawText)) rawText = delinearizeTable(rawText);
+  if (isBlockFormat(rawText)) return parseBlockFormat(rawText, type, takeHalf);
+  if (isSpaceSeparatedGradedFormat(rawText)) return parseSpaceSeparatedGraded(rawText, type, takeHalf);
+  if (isGradedFormat(rawText)) return parseGraded(rawText, type, takeHalf);
+  if (isFieldValueFormat(rawText, type)) return parseFieldValueLines(rawText, type, takeHalf);
+  if (isSingleLineFormat(rawText)) return parseSingleLine(rawText, type, takeHalf);
   const firstLine = rawText.trim().split('\n')[0];
   const bagTabular = type === 'bag' && firstLine.includes('\t') && !firstLine.includes(':');
   const hasTabular = (TOPS_TYPES.has(type) || PANTS_TYPES.has(type)) && (rawText.includes('\t') || isTabularFormat(rawText));
-  console.log('[parse] → parseTabular, hasTabular:', hasTabular);
   if (hasTabular || isTabularFormat(rawText) || bagTabular) return parseTabular(rawText, type, takeHalf);
   return parseSingleLine(rawText, type, takeHalf);
 }
