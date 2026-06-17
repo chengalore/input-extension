@@ -134,7 +134,7 @@ const TOPS_COLUMN_MAP = {
   '허리둘레': 'waist',
   '밑단둘레': 'hem',
   '힙둘레': 'hip',
-  // Spec-sheet / tech-pack verbose descriptions (e.g. Acne Studios)
+  // Spec-sheet / tech-pack verbose descriptions (e.g. Acne Studios, POM sheets)
   'low hip':                'hip',
   'low hip position':       'hip',
   'bottom width':           'hem',
@@ -142,6 +142,9 @@ const TOPS_COLUMN_MAP = {
   'skirt cb length':        'height',
   'skirt side seam length': 'height',
   'skirt length':           'height',
+  'front length':           'height',
+  'across shoulder':        'shoulder',
+  'shoulder lenght':        'shoulder',   // common typo in brand spec sheets
 };
 
 // Waist priority: relaxed > stretched > generic
@@ -220,6 +223,98 @@ function normalizeMeasurements(measurements, takeHalf) {
       measurements[field] = measurements[field] / 2;
     }
   }
+}
+
+// ─── TSV parser (handles quoted multi-line cells) ────────────────────────────
+// When copying from Excel/Sheets, cells with newlines are wrapped in quotes.
+// This parser keeps only the first line of each quoted multi-line cell,
+// so "XS/XXS\nXXS" becomes "XS/XXS" (the display label, not the alternate).
+
+function parseTSVLines(rawText) {
+  const rows = [];
+  let row = [];
+  let cell = '';
+  let inQuote = false;
+  let discardRest = false;
+
+  for (let i = 0; i < rawText.length; i++) {
+    const ch = rawText[i];
+    if (inQuote) {
+      if (ch === '"') {
+        if (rawText[i + 1] === '"') { cell += '"'; i++; }  // escaped ""
+        else { inQuote = false; discardRest = false; }       // end of quoted cell
+      } else if (!discardRest) {
+        if (ch === '\n') discardRest = true;  // keep first line only
+        else cell += ch;
+      }
+    } else {
+      if (ch === '"' && cell === '') { inQuote = true; }
+      else if (ch === '\t') { row.push(cell); cell = ''; }
+      else if (ch === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; }
+      else { cell += ch; }
+    }
+  }
+  row.push(cell);
+  if (row.some(c => c)) rows.push(row);
+  return rows;
+}
+
+// ─── POM spec-sheet parser ───────────────────────────────────────────────────
+// "POM" (Point of Measure) sheets: col 0 = measurement description,
+// cols 1-N = one value per size. The header row has "POM" as col 0,
+// size labels (XS/XXS, S/XS, M/S, ...) in cols 1-N.
+
+function tryParsePomSheet(rows, type, takeHalf) {
+  const pomRowIdx = rows.findIndex(r => (r[0] ?? '').trim().toUpperCase() === 'POM');
+  if (pomRowIdx < 0) return null;
+
+  const headerRow = rows[pomRowIdx];
+  const sizeLabels = headerRow.slice(1).map(s => s.trim()).filter(Boolean);
+  if (sizeLabels.length < 2) return null;
+
+  const colMap = TOPS_TYPES.has(type) ? TOPS_COLUMN_MAP
+               : PANTS_TYPES.has(type) ? PANTS_COLUMN_MAP
+               : BAG_COLUMN_MAP;
+
+  const sizes = {};
+  const errors = [];
+  for (const s of sizeLabels) sizes[s] = {};
+
+  for (let i = pomRowIdx + 1; i < rows.length; i++) {
+    const cols = rows[i];
+    if (cols.length < 2) continue;
+
+    const desc = (cols[0] ?? '').trim();
+    const descNorm = desc.toLowerCase()
+      .replace(/\s*\*\s*$/g, '')           // trailing * annotation (e.g. "Chest *")
+      .replace(/\s*\([^)]*\)/g, '')        // (from HPS), (long), (2cm below armhole)
+      .replace(/\s+incl\.?\b.*/i, '')      // "incl. Rib/trim at bottom"
+      .replace(/\s+from\b.*/i, '')         // "from CB"
+      .replace(/\s+extended\b.*/i, '')     // "extended, 2cm above rib/trim"
+      .replace(/,.*$/, '')                 // everything after comma
+      .trim();
+
+    const field = colMap[descNorm]
+      ?? colMap[descNorm.replace(/^(?:skirt|pant|pants|top|jacket|coat|dress|front|back|across)\s+/i, '').trim()];
+    if (!field || field.startsWith('_')) continue;
+
+    const valueCells = cols.slice(1);
+    sizeLabels.forEach((size, si) => {
+      const val = parseFloat((valueCells[si] ?? '').replace(',', '.'));
+      if (!isNaN(val) && !(field in sizes[size])) sizes[size][field] = val;
+    });
+  }
+
+  for (const [sizeLabel, measurements] of Object.entries(sizes)) {
+    if (Object.keys(measurements).length === 0) { delete sizes[sizeLabel]; continue; }
+    normalizeMeasurements(measurements, takeHalf);
+    computeSleeve(measurements);
+    const missing = TYPE_CONFIG[type].required.filter(k => !(k in measurements));
+    if (missing.length) errors.push(`"${sizeLabel}" is missing required fields: ${missing.join(', ')}`);
+  }
+
+  if (Object.keys(sizes).length === 0) return null;
+  return { sizes, errors };
 }
 
 // ─── Spec-sheet parser (brand tech-pack / grading table) ─────────────────────
@@ -315,8 +410,16 @@ function extractNumbers(str) {
 }
 
 function parseTabular(rawText, type, takeHalf) {
-  // Don't trim lines before splitting — preserves leading tabs that mark an empty size-column header
-  let lines = rawText.split('\n').filter(l => l.trim());
+  // Parse TSV with quoted multi-line cells ("XS/XXS\nXXS" → 'XS/XXS')
+  const tsvRows = parseTSVLines(rawText);
+
+  // POM spec-sheet: header row has "POM" as first cell
+  const pomResult = tryParsePomSheet(tsvRows, type, takeHalf);
+  if (pomResult) return pomResult;
+
+  // Reconvert TSV rows to tab-joined lines for the rest of the logic.
+  // Don't trim — preserves leading tabs that mark an empty size-column header.
+  let lines = tsvRows.map(r => r.join('\t')).filter(l => l.trim());
   if (lines.length < 2) {
     return { sizes: {}, errors: ['Need at least a header row and one data row.'] };
   }
