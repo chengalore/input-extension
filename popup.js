@@ -231,22 +231,30 @@ function normalizeMeasurements(measurements, takeHalf) {
 // so "XS/XXS\nXXS" becomes "XS/XXS" (the display label, not the alternate).
 
 function parseTSVLines(rawText) {
+  // Parses tab-separated values, handling quoted multi-line cells.
+  // Keeps up to two lines of each quoted cell (separated by \n in the returned value)
+  // so the caller can pick the better label (e.g. "XS/XXS" over "XXS").
   const rows = [];
   let row = [];
   let cell = '';
   let inQuote = false;
-  let discardRest = false;
+  let newlineCount = 0;   // how many embedded \n seen in current quoted cell
 
   for (let i = 0; i < rawText.length; i++) {
     const ch = rawText[i];
     if (inQuote) {
       if (ch === '"') {
         if (rawText[i + 1] === '"') { cell += '"'; i++; }  // escaped ""
-        else { inQuote = false; discardRest = false; }       // end of quoted cell
-      } else if (!discardRest) {
-        if (ch === '\n') discardRest = true;  // keep first line only
-        else cell += ch;
+        else { inQuote = false; newlineCount = 0; }          // end of quoted cell
+      } else if (newlineCount < 2) {
+        if (ch === '\n') {
+          if (newlineCount === 0) cell += '\n';  // store line separator; skip subsequent \n
+          newlineCount++;
+        } else {
+          cell += ch;
+        }
       }
+      // newlineCount >= 2: skip remaining content until closing "
     } else {
       if (ch === '"' && cell === '') { inQuote = true; }
       else if (ch === '\t') { row.push(cell); cell = ''; }
@@ -268,19 +276,64 @@ function tryParsePomSheet(rows, type, takeHalf) {
   const pomRowIdx = rows.findIndex(r => (r[0] ?? '').trim().toUpperCase() === 'POM');
   if (pomRowIdx < 0) return null;
 
-  const headerRow = rows[pomRowIdx];
-  const sizeLabels = headerRow.slice(1).map(s => s.trim()).filter(Boolean);
+  let headerRow = rows[pomRowIdx];
+  let dataStartIdx = pomRowIdx + 1;
+
+  // When a spreadsheet's multi-line header cells are pasted without quotes, each
+  // embedded newline becomes a real row break. The POM row then has only 2 cells
+  // (POM + first-line of first size label), followed by continuation rows where
+  // cell[0] is the alt label (second line) and cell[1] is the first-line of the
+  // next size. Collect these until we hit an actual data row (many cells).
+  if (headerRow.length <= 2) {
+    const collected = headerRow.slice(1).map(s => s.trim()).filter(Boolean);
+    while (dataStartIdx < rows.length) {
+      const r = rows[dataStartIdx];
+      if (r.length > 3) break;             // data rows have many cols — stop
+      if (r[1] !== undefined) collected.push(r[1].trim());
+      dataStartIdx++;
+    }
+    headerRow = ['POM', ...collected];
+  }
+
+  // For multi-line header cells (stored as "line1\nline2"), prefer the line that
+  // contains '/' — that's the composite size label (e.g. "XS/XXS" beats "XXS").
+  const pickLabel = s => {
+    const lines = s.split('\n').map(l => l.trim()).filter(Boolean);
+    return lines.find(l => l.includes('/')) ?? lines[0] ?? '';
+  };
+  const sizeLabels = headerRow.slice(1).map(s => pickLabel(s)).filter(Boolean);
   if (sizeLabels.length < 2) return null;
 
   const colMap = TOPS_TYPES.has(type) ? TOPS_COLUMN_MAP
                : PANTS_TYPES.has(type) ? PANTS_COLUMN_MAP
                : BAG_COLUMN_MAP;
 
+  // When pasted unquoted, alt labels (XXS, XS, S…) land in the header row (first line of cells)
+  // and composite labels (XS/XXS, S/XS, M/S…) appear in the very next row.
+  // The header row has length > 2 so the fragmented path doesn't apply; the composite row then
+  // gets treated as data and silently skipped. Detect it: if the row right after the header has
+  // '/' in non-first cells but no measurement field in col 0, treat it as composite-labels and
+  // upgrade any plain label with the composite version.
+  if (dataStartIdx < rows.length) {
+    const nextRow = rows[dataStartIdx];
+    const col0 = (nextRow[0] ?? '').trim().toLowerCase();
+    const nextCols = nextRow.slice(1);
+    const hasComposite = nextCols.some(c => (c ?? '').includes('/'));
+    const noMeasField = !col0 || !colMap[col0];
+    if (hasComposite && noMeasField) {
+      for (let i = 0; i < sizeLabels.length; i++) {
+        const candidate = (nextCols[i] ?? '').trim();
+        if (candidate.includes('/') && !sizeLabels[i].includes('/')) sizeLabels[i] = candidate;
+      }
+      dataStartIdx++;
+    }
+  }
+
   const sizes = {};
   const errors = [];
   for (const s of sizeLabels) sizes[s] = {};
 
-  for (let i = pomRowIdx + 1; i < rows.length; i++) {
+  for (let i = dataStartIdx; i < rows.length; i++) {
     const cols = rows[i];
     if (cols.length < 2) continue;
 
