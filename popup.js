@@ -1,4 +1,5 @@
 'use strict';
+console.log('[popup.js] loaded – build 3');
 
 // ─── Type definitions ────────────────────────────────────────────────────────
 
@@ -302,6 +303,7 @@ function tryParsePomSheet(rows, type, takeHalf) {
     return lines.find(l => l.includes('/')) ?? lines[0] ?? '';
   };
   const sizeLabels = headerRow.slice(1).map(s => pickLabel(s)).filter(Boolean);
+  console.log('[POM] sizeLabels:', sizeLabels);
   if (sizeLabels.length < 2) return null;
 
   const colMap = TOPS_TYPES.has(type) ? TOPS_COLUMN_MAP
