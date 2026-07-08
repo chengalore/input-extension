@@ -29,11 +29,11 @@ const TYPE_CONFIG = {
   },
   dress: {
     required: ['height', 'bust'],
-    optional: ['shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem'],
+    optional: ['shoulder', 'sleeve_length', 'sleeve', 'waist', 'waistHeight', 'hip', 'hem'],
   },
   dressALine: {
     required: ['height', 'bust'],
-    optional: ['shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem'],
+    optional: ['shoulder', 'sleeve_length', 'sleeve', 'waist', 'waistHeight', 'hip', 'hem'],
   },
   tunicSleeve: {
     required: ['height', 'bust'],
@@ -136,7 +136,7 @@ const TOPS_COLUMN_MAP = {
   '힙둘레': 'hip',
   // Spec-sheet / tech-pack verbose descriptions (e.g. Acne Studios, POM sheets)
   'low hip':                'hip',
-  'low hip position':       'hip',
+  'waist position':         'waistHeight',
   'bottom width':           'hem',
   'skirt cf length':        'height',
   'skirt cb length':        'height',
@@ -197,6 +197,7 @@ const FIELD_DISPLAY_NAMES = {
   inseam: 'Inseam', hip: 'Hip', thigh: 'Thigh',
   knee: 'Knee', legOpening: 'Ankle opening', armOpening: 'Arm opening',
   frontRise: 'Front rise', backRise: 'Back rise',
+  waistHeight: 'Waist height',
   width: 'Width', depth: 'Depth',
 };
 
@@ -207,8 +208,8 @@ const TABLE_FIELD_ORDER = {
   jacket:      ['height', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem', 'bicep'],
   coat:        ['height', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem', 'bicep'],
   sweater:        ['height', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem', 'bicep'],
-  dress:       ['height', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem'],
-  dressALine:  ['height', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem'],
+  dress:       ['height', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'waist', 'waistHeight', 'hip', 'hem'],
+  dressALine:  ['height', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'waist', 'waistHeight', 'hip', 'hem'],
   tunicSleeve: ['height', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem'],
   top:         ['height', 'bust', 'waist', 'hem', 'armOpening'],
   skirt:       ['height', 'waist', 'hip', 'hem'],
@@ -1565,9 +1566,14 @@ function delinearizeTable(rawText) {
 }
 
 function parse(rawText, type, takeHalf) {
-  // POM spec-sheet: any row starting with "POM\t" — must route to parseTabular before
-  // any other format detector (graded, field-value, etc.) can intercept it.
+  // POM spec-sheet and Dim/Ref/Code tech-pack sheets: route to parseTabular before
+  // isGradedFormat intercepts (it matches "POM code\t", "Dim\t", "Ref\t", "Code\t").
+  // Distinguish tech-pack from graded by the presence of pure-integer size labels.
   if (/^POM\t/m.test(rawText)) return parseTabular(rawText, type, takeHalf);
+  if (/^(?:dim|ref|code)\t/im.test(rawText.split('\n').slice(0, 4).join('\n'))) {
+    const top = rawText.split('\n').slice(0, 6).join('\n');
+    if (/(?:^|\t)\d{2,3}(?:\t\d{2,3}){2,}/m.test(top)) return parseTabular(rawText, type, takeHalf);
+  }
   if (isLinearizedTableFormat(rawText)) rawText = delinearizeTable(rawText);
   if (isBlockFormat(rawText)) return parseBlockFormat(rawText, type, takeHalf);
   if (isSpaceSeparatedGradedFormat(rawText)) return parseSpaceSeparatedGraded(rawText, type, takeHalf);
