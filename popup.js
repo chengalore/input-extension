@@ -1519,6 +1519,9 @@ function isLinearizedTableFormat(rawText) {
   const cells = rawText.split(sep).map(c => c.trim()).filter(Boolean);
   if (cells.length < 6) return false;
   if (!cells.slice(0, 2).every(c => !/^\d+\.?\d*$/.test(c))) return false;
+  // Reject "SizeLabel\n: field: val, ..." format — cells starting with ':' are
+  // measurement strings joined to the preceding size label by joinContinuationLines.
+  if (cells.some(c => c.startsWith(':'))) return false;
   return _linearColCount(cells) > 0;
 }
 
