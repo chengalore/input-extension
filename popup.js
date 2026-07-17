@@ -171,6 +171,7 @@ const PANTS_COLUMN_MAP = {
   'leg opening':       'legOpening',
   'leg bottom width':  'legOpening',
   'hem width':         'legOpening',
+  'ankle opening':     'legOpening',
   'rise':              'frontRise',
   'front rise':        'frontRise',
   'back rise':         'backRise',
@@ -181,8 +182,15 @@ const PANTS_COLUMN_MAP = {
   'ﾋｯﾌﾟ':             'hip',
   '股下':              'inseam',
   '前股上':            'frontRise',
+  '股上':              'frontRise',
   '渡り幅':            'thigh',
   '裾幅':              'legOpening',
+  // Full-width katakana / hiragana variants seen in consumer size charts
+  // (as opposed to the half-width forms above from spec sheets)
+  'ウエスト':          'waist',
+  'ヒップ':            'hip',
+  'わたり':            'thigh',
+  '裾周り':            'legOpening',
 };
 
 // ─── Measurement normalization ────────────────────────────────────────────────
@@ -266,6 +274,74 @@ function parseTSVLines(rawText) {
   row.push(cell);
   if (row.some(c => c)) rows.push(row);
   return rows;
+}
+
+// ─── Virtusize QA-report parser ───────────────────────────────────────────────
+// A validation report matching Virtusize fields to factory POM lines, e.g.:
+// "Virtusize Measurement | Status | Matched Factory POM (SPEC tab) | Conversion
+// needed | Formula used | 28 | 29 | ... | 42". Rows = one field each (already
+// labelled "A — Waist", "B — Hip", ...); the size grade columns are the
+// trailing run of numeric header cells. A second "OPTIONAL MEASUREMENTS"
+// section repeats the header and continues adding fields to the same sizes.
+
+const LETTER_CODE_PREFIX_RE = /^[A-Za-z]\s*[—\-–]\s*/;
+
+function tryParseVirtusizeReport(rows, type, takeHalf) {
+  const hasHeader = rows.some(r => (r[0] ?? '').trim().toLowerCase() === 'virtusize measurement');
+  if (!hasHeader) return null;
+
+  const colMap = TOPS_TYPES.has(type) ? TOPS_COLUMN_MAP
+               : PANTS_TYPES.has(type) ? PANTS_COLUMN_MAP
+               : BAG_COLUMN_MAP;
+
+  const sizes = {};
+  const errors = [];
+  let sizeIdxs = null;
+  let sizeLabels = null;
+
+  for (const row of rows) {
+    const cells = row.map(c => (c ?? '').trim());
+    if (!cells.some(Boolean)) continue;
+
+    if (cells[0].toLowerCase() === 'virtusize measurement') {
+      // Size grade columns are the trailing contiguous run of numeric header cells.
+      const idxs = [];
+      for (let c = cells.length - 1; c >= 0; c--) {
+        if (/^\d+(\.\d+)?$/.test(cells[c])) idxs.unshift(c);
+        else if (idxs.length) break;
+      }
+      if (idxs.length >= 2) {
+        sizeIdxs = idxs;
+        sizeLabels = idxs.map(idx => cells[idx]);
+        for (const s of sizeLabels) if (!(s in sizes)) sizes[s] = {};
+      }
+      continue;
+    }
+
+    if (!sizeIdxs) continue;
+
+    const fieldSource = cells[0].replace(LETTER_CODE_PREFIX_RE, '').trim().toLowerCase();
+    const field = colMap[fieldSource];
+    if (!field) continue;
+
+    sizeIdxs.forEach((idx, k) => {
+      const val = parseFloat((cells[idx] ?? '').replace(',', '.'));
+      if (!isNaN(val) && !(field in sizes[sizeLabels[k]])) sizes[sizeLabels[k]][field] = val;
+    });
+  }
+
+  if (!sizeIdxs) return null;
+
+  for (const [sizeLabel, measurements] of Object.entries(sizes)) {
+    if (Object.keys(measurements).length === 0) { delete sizes[sizeLabel]; continue; }
+    normalizeMeasurements(measurements, takeHalf);
+    computeSleeve(measurements);
+    const missing = TYPE_CONFIG[type].required.filter(k => !(k in measurements));
+    if (missing.length) errors.push(`"${sizeLabel}" is missing required fields: ${missing.join(', ')}`);
+  }
+
+  if (Object.keys(sizes).length === 0) return null;
+  return { sizes, errors };
 }
 
 // ─── POM spec-sheet parser ───────────────────────────────────────────────────
@@ -471,6 +547,10 @@ function parseTabular(rawText, type, takeHalf) {
   const pomResult = tryParsePomSheet(tsvRows, type, takeHalf);
   if (pomResult) return pomResult;
 
+  // Virtusize QA-report: header row starts with "Virtusize Measurement"
+  const vsReportResult = tryParseVirtusizeReport(tsvRows, type, takeHalf);
+  if (vsReportResult) return vsReportResult;
+
   // Reconvert TSV rows to tab-joined lines for the rest of the logic.
   // Don't trim — preserves leading tabs that mark an empty size-column header.
   let lines = tsvRows.map(r => r.join('\t')).filter(l => l.trim());
@@ -527,12 +607,18 @@ function parseTabular(rawText, type, takeHalf) {
 
   // Map each column index to its output field name.
   // Strip a leading "(Garment) " or "[Variant] " prefix so "(Blouse) Bust" / "[IND] Bust" → "bust" etc.
+  // Combined tops+pants charts prefix each column with the garment it belongs to
+  // (e.g. "トップス身幅" / "パンツ股下"). Strip that prefix so the bare field name
+  // ("身幅" / "股下") resolves against the map.
+  const GARMENT_PREFIX_JA = /^(?:パンツ|トップス|ボトムス|スカート|ワンピース)/;
+
   const indexToField = {};
   headers.forEach((h, i) => {
     if (i === sizeIdx) return;
     const stripped = h.replace(/^(?:[(（][^)）]+[)）]|\[[^\]]+\])\s*/, '')  // strip leading qualifier
                       .replace(/\s*[(（][^)）]+[)）]$/, '').trim();            // strip trailing qualifier (inc. full-width （）)
-    const field = colMap[h] ?? colMap[stripped];
+    const strippedGarment = stripped.replace(GARMENT_PREFIX_JA, '');
+    const field = colMap[h] ?? colMap[stripped] ?? colMap[strippedGarment];
     if (field && !(i in indexToField)) indexToField[i] = field;
   });
 
