@@ -304,11 +304,19 @@ function tryParseVirtusizeReport(rows, type, takeHalf) {
     if (!cells.some(Boolean)) continue;
 
     if (cells[0].toLowerCase() === 'virtusize measurement') {
-      // Size grade columns are the trailing contiguous run of numeric header cells.
-      const idxs = [];
-      for (let c = cells.length - 1; c >= 0; c--) {
-        if (/^\d+(\.\d+)?$/.test(cells[c])) idxs.unshift(c);
-        else if (idxs.length) break;
+      // Size grade columns start right after the "Formula used" marker column.
+      // Fall back to a trailing run of numeric header cells if that marker is absent.
+      const formulaIdx = cells.findIndex(c => c.toLowerCase() === 'formula used');
+      let idxs = [];
+      if (formulaIdx >= 0) {
+        for (let c = formulaIdx + 1; c < cells.length; c++) {
+          if (cells[c] !== '') idxs.push(c);
+        }
+      } else {
+        for (let c = cells.length - 1; c >= 0; c--) {
+          if (/^\d+(\.\d+)?$/.test(cells[c])) idxs.unshift(c);
+          else if (idxs.length) break;
+        }
       }
       if (idxs.length >= 2) {
         sizeIdxs = idxs;
