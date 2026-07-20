@@ -128,7 +128,9 @@ const TOPS_COLUMN_MAP = {
   '袖丈':  'sleeve_length',
   '着丈':  'height',
   '身丈':  'height',
+  '総丈':  'height',
   'ウエスト': 'waist',
+  'ヒップ': 'hip',
   '裾幅':  'hem',
   // Korean field names
   '앞총장': 'height',
@@ -1719,27 +1721,31 @@ function isLinearizedTableFormat(rawText, type) {
                : PANTS_TYPES.has(type) ? PANTS_COLUMN_MAP
                : null;
   if (colMap && cells.some(c => Object.keys(extractKnownFieldPairs(c, colMap)).length >= 2)) return false;
-  return _linearColCount(cells) > 0;
+  return _linearColCount(cells, colMap) > 0;
 }
 
 // A row-start cell is invalid as a size label if it is a dash, a measurement with a unit,
 // or an all-CJK/Japanese/Korean string (those are field names, not size codes).
 // Cells that are alphanumeric product codes like "W28L32ｲﾝﾁ" pass because they contain ASCII.
-function _invalidSizeStart(c) {
+function _invalidSizeStart(c, colMap) {
   if (!c || /^[-–—]+$/.test(c)) return true;
   if (/^\d+\.?\d*\s*(cm|mm|in|inch|kg|g|lbs?)\b/i.test(c)) return true;
   // All-CJK/kana/hangul — field names in Japanese/Korean tables
   if (/^[　-鿿가-힯豈-﫿＀-￿\s（）「」！？、。・ー]+$/.test(c)) return true;
+  // A recognized measurement field name (in any language) is a label, not a size
+  // code -- e.g. English "Machi" isn't caught by the CJK check above but is still
+  // a header cell, not a row start.
+  if (colMap && colMap[c.trim().toLowerCase()]) return true;
   return false;
 }
 
-function _linearColCount(cells) {
+function _linearColCount(cells, colMap) {
   const isDecimal = s => /^\d+\.?\d*$/.test(s);
   for (let colCount = 2; colCount <= 10 && colCount < cells.length; colCount++) {
     const rowStarts = [];
     let valid = true;
     for (let i = colCount; i < cells.length; i += colCount) {
-      if (_invalidSizeStart(cells[i])) { valid = false; break; }
+      if (_invalidSizeStart(cells[i], colMap)) { valid = false; break; }
       rowStarts.push(cells[i]);
     }
     if (!valid) continue;
@@ -1753,10 +1759,14 @@ function _linearColCount(cells) {
 }
 
 // Reshape linearized cells into a TSV string using the detected column count.
-function delinearizeTable(rawText) {
+function delinearizeTable(rawText, type) {
   const sep = rawText.includes('\n\n') ? /\n\n+/ : /\n/;
   const cells = rawText.split(sep).map(c => c.trim()).filter(Boolean);
-  const colCount = _linearColCount(cells);
+  const colMap = type === 'bag' ? BAG_COLUMN_MAP
+               : TOPS_TYPES.has(type) ? TOPS_COLUMN_MAP
+               : PANTS_TYPES.has(type) ? PANTS_COLUMN_MAP
+               : null;
+  const colCount = _linearColCount(cells, colMap);
   if (colCount < 0) return rawText;
   const rows = [];
   for (let i = 0; i < cells.length; i += colCount) {
@@ -1774,7 +1784,7 @@ function parse(rawText, type, takeHalf) {
     const top = rawText.split('\n').slice(0, 6).join('\n');
     if (/(?:^|\t)\d{2,3}(?:\t\d{2,3}){2,}/m.test(top)) return parseTabular(rawText, type, takeHalf);
   }
-  if (isLinearizedTableFormat(rawText, type)) rawText = delinearizeTable(rawText);
+  if (isLinearizedTableFormat(rawText, type)) rawText = delinearizeTable(rawText, type);
   if (isBlockFormat(rawText)) return parseBlockFormat(rawText, type, takeHalf);
   if (isSpaceSeparatedGradedFormat(rawText)) return parseSpaceSeparatedGraded(rawText, type, takeHalf);
   if (isGradedFormat(rawText)) return parseGraded(rawText, type, takeHalf);
