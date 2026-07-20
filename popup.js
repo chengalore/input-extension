@@ -1884,13 +1884,14 @@ parseBtn.addEventListener('click', () => {
 
   outputPre.textContent = tableMode ? toOutputTable(sizes, type) : toOutputJSON(sizes, type);
   outputSection.classList.remove('hidden');
+  copyOutputToClipboard();
 
   if (errors.length) {
     showError(errors.join('\n'));
   }
 });
 
-copyBtn.addEventListener('click', () => {
+function copyOutputToClipboard() {
   const text = outputPre.textContent;
   navigator.clipboard.writeText(text).then(() => {
     copyBtn.textContent = 'Copied!';
@@ -1900,7 +1901,9 @@ copyBtn.addEventListener('click', () => {
       copyBtn.classList.remove('copied');
     }, 1500);
   });
-});
+}
+
+copyBtn.addEventListener('click', copyOutputToClipboard);
 
 function showError(msg) {
   errorMsg.textContent = msg;
