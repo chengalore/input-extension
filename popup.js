@@ -176,6 +176,7 @@ const PANTS_COLUMN_MAP = {
   'thigh':             'thigh',
   'watari':            'thigh',
   'thigh circumference': 'thigh',
+  'thigh width':       'thigh',
   'inseam':            'inseam',
   'crotch length':     'inseam',
   'knee':              'knee',
@@ -571,7 +572,9 @@ function extractKnownFieldPairs(str, colMap) {
     .sort((a, b) => b.length - a.length);
   if (keys.length === 0) return {};
   const escaped = keys.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  const re = new RegExp(`(${escaped.join('|')})\\s*[:：]\\s*(\\d+\\.?\\d*)`, 'gi');
+  // Allow an optional qualifier between the field name and its colon, e.g.
+  // "Hip (18cm below top): 84cm" — otherwise the key never reaches the colon.
+  const re = new RegExp(`(${escaped.join('|')})\\s*(?:[(（][^)）]*[)）])?\\s*[:：]\\s*(\\d+\\.?\\d*)`, 'gi');
   const result = {};
   let m;
   while ((m = re.exec(str)) !== null) {
@@ -994,7 +997,11 @@ function parseSegment(segment, type) {
     const sortedKeys = Object.keys(PANTS_COLUMN_MAP).sort((a, b) => b.length - a.length);
     for (const key of sortedKeys) {
       if (sl.startsWith(key)) {
-        const numMatch = s.slice(key.length).match(/\d+\.?\d*/);
+        // Skip a qualifier note between the field name and its value, e.g.
+        // "Hip (18cm below top): 94cm" — without this, the first number found
+        // would be the qualifier's own "18", not the real value "94".
+        const rest = s.slice(key.length).replace(/^\s*[(（][^)）]*[)）]/, '');
+        const numMatch = rest.match(/\d+\.?\d*/);
         if (numMatch) {
           result[PANTS_COLUMN_MAP[key]] = parseFloat(numMatch[0]);
           return result;
@@ -1691,7 +1698,7 @@ function parseBlockFormat(rawText, type, takeHalf) {
 // Supports both blank-line-separated (double \n) and single-newline variants.
 // e.g. "Size / Cm\n\nTotal\n\nChest\n\nS\n\n50\n\n74\n\n..."
 // e.g. "size\nLength\nshoulder width\nF (One Size Fits All)\n58\n75\n..."
-function isLinearizedTableFormat(rawText) {
+function isLinearizedTableFormat(rawText, type) {
   if (rawText.includes('\t')) return false;
   const sep = rawText.includes('\n\n') ? /\n\n+/ : /\n/;
   const cells = rawText.split(sep).map(c => c.trim()).filter(Boolean);
@@ -1700,6 +1707,18 @@ function isLinearizedTableFormat(rawText) {
   // Reject "SizeLabel\n: field: val, ..." format — cells starting with ':' are
   // measurement strings joined to the preceding size label by joinContinuationLines.
   if (cells.some(c => c.startsWith(':'))) return false;
+  // Reject cells that already bundle multiple distinct recognized fields on one
+  // line (e.g. "Rise: 38cm Inseam: 65cm Waist: 56cm ..."). These aren't atomic
+  // values needing reshaping into columns — parseSingleLine already handles them
+  // directly, and delinearizing would inject a tab mid-line and misroute to
+  // parseTabular. A plain colon count is too broad: a legitimate single value
+  // like "短：31.0　長：59.0cm" (short/long handle length) also has 2 colons
+  // without being a multi-field record, so check against known field names instead.
+  const colMap = type === 'bag' ? BAG_COLUMN_MAP
+               : TOPS_TYPES.has(type) ? TOPS_COLUMN_MAP
+               : PANTS_TYPES.has(type) ? PANTS_COLUMN_MAP
+               : null;
+  if (colMap && cells.some(c => Object.keys(extractKnownFieldPairs(c, colMap)).length >= 2)) return false;
   return _linearColCount(cells) > 0;
 }
 
@@ -1755,7 +1774,7 @@ function parse(rawText, type, takeHalf) {
     const top = rawText.split('\n').slice(0, 6).join('\n');
     if (/(?:^|\t)\d{2,3}(?:\t\d{2,3}){2,}/m.test(top)) return parseTabular(rawText, type, takeHalf);
   }
-  if (isLinearizedTableFormat(rawText)) rawText = delinearizeTable(rawText);
+  if (isLinearizedTableFormat(rawText, type)) rawText = delinearizeTable(rawText);
   if (isBlockFormat(rawText)) return parseBlockFormat(rawText, type, takeHalf);
   if (isSpaceSeparatedGradedFormat(rawText)) return parseSpaceSeparatedGraded(rawText, type, takeHalf);
   if (isGradedFormat(rawText)) return parseGraded(rawText, type, takeHalf);
