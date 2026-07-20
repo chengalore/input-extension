@@ -67,6 +67,8 @@ const BAG_COLUMN_MAP = {
   'thickness':  'depth',
   'town':       'depth',  // English translation of Japanese "machi" (gusset/depth)
   'length':     'height',
+  'long':       'height',
+  'side width': 'depth',
   // Japanese bag field names
   '横':    'width',
   '幅':    'width',
@@ -558,6 +560,27 @@ function extractNumbers(str) {
   return t !== null ? [t] : [];
 }
 
+// Scans a whole line for every "Known Field Name: number" occurrence, regardless
+// of what (if anything) separates them — handles lines like "Shoulder width: 64.5cm
+// Chest width: 70.5cm Length: 118.0cm" where fields are space-separated rather than
+// comma/slash-delimited, so a single naive split-and-parse-first-match misses all
+// but the first field.
+function extractKnownFieldPairs(str, colMap) {
+  const keys = Object.keys(colMap)
+    .filter(k => typeof colMap[k] === 'string' && !colMap[k].startsWith('_'))
+    .sort((a, b) => b.length - a.length);
+  if (keys.length === 0) return {};
+  const escaped = keys.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const re = new RegExp(`(${escaped.join('|')})\\s*[:：]\\s*(\\d+\\.?\\d*)`, 'gi');
+  const result = {};
+  let m;
+  while ((m = re.exec(str)) !== null) {
+    const field = colMap[m[1].toLowerCase()];
+    if (field && !(field in result)) result[field] = parseFloat(m[2]);
+  }
+  return result;
+}
+
 function parseTabular(rawText, type, takeHalf) {
   // Parse TSV with quoted multi-line cells ("XS/XXS\nXXS" → 'XS/XXS')
   const tsvRows = parseTSVLines(rawText);
@@ -584,15 +607,19 @@ function parseTabular(rawText, type, takeHalf) {
   if (lines.slice(1).some(l => MEASUREMENT_LEAD_RE.test(l.split('\t')[0] ?? ''))) {
     const repaired = [];
     let pending = null;
-    for (const rawLine of lines) {
+    lines.forEach((rawLine, idx) => {
       const cols = rawLine.split('\t').map(c => c.trim());
-      if (pending !== null && MEASUREMENT_LEAD_RE.test(cols[0] ?? '')) {
+      // The first data row (idx === 1) can never be a continuation — a continuation
+      // only makes sense once a real data row has already been established as `pending`,
+      // otherwise a legitimate single data row whose own first cell is a bare measurement
+      // (e.g. a bag's "long" column) gets wrongly swallowed into the header row.
+      if (idx > 1 && pending !== null && MEASUREMENT_LEAD_RE.test(cols[0] ?? '')) {
         pending.push(...cols.slice(1)); // discard inch alt, append remaining values
       } else {
         if (pending !== null) repaired.push(pending.join('\t'));
         pending = [...cols];
       }
-    }
+    });
     if (pending !== null) repaired.push(pending.join('\t'));
     lines = repaired;
   }
@@ -605,6 +632,19 @@ function parseTabular(rawText, type, takeHalf) {
   const colMap = TOPS_TYPES.has(type)  ? TOPS_COLUMN_MAP
                : PANTS_TYPES.has(type) ? PANTS_COLUMN_MAP
                : BAG_COLUMN_MAP;
+
+  // Strip a leading "(Garment) " / "[Variant] " or trailing "(qualifier)" so
+  // "(Blouse) Bust" / "[IND] Bust" / "Width (body)" → "bust" / "width" etc.
+  // Combined tops+pants charts also prefix each column with the garment it belongs
+  // to (e.g. "トップス身幅" / "パンツ股下"); strip that too so the bare field name
+  // ("身幅" / "股下") resolves against the map.
+  const GARMENT_PREFIX_JA = /^(?:パンツ|トップス|ボトムス|スカート|ワンピース)/;
+  const fieldForHeader = h => {
+    const stripped = h.replace(/^(?:[(（][^)）]+[)）]|\[[^\]]+\])\s*/, '')
+                      .replace(/\s*[(（][^)）]+[)）]$/, '').trim();
+    const strippedGarment = stripped.replace(GARMENT_PREFIX_JA, '');
+    return colMap[h] ?? colMap[stripped] ?? colMap[strippedGarment];
+  };
 
   let sizeIdx = headers.findIndex(h => h === 'size');
   if (sizeIdx === -1 && headers[0] === '') sizeIdx = 0;
@@ -619,25 +659,36 @@ function parseTabular(rawText, type, takeHalf) {
   }
   // Last fallback: if first header isn't a known measurement field, treat it as the size column.
   // Covers labels like "Main unit", "Item", "No.", etc.
-  if (sizeIdx === -1 && !colMap[headers[0]]) sizeIdx = 0;
+  if (sizeIdx === -1 && !fieldForHeader(headers[0])) sizeIdx = 0;
+  // No column left to fall back on: every header (including col 0) is a known
+  // measurement field, so there's no dedicated size label at all — a single
+  // dimension row for one item (e.g. a bag with no size variants).
+  if (sizeIdx === -1 && lines.length === 2) {
+    const cols = lines[1].split('\t').map(c => c.trim());
+    const measurements = {};
+    headers.forEach((h, i) => {
+      const field = fieldForHeader(h);
+      if (!field) return;
+      const nums = extractNumbers(cols[i] ?? '');
+      if (nums.length > 0 && !(field in measurements)) measurements[field] = nums[0];
+    });
+    normalizeMeasurements(measurements, takeHalf);
+    computeSleeve(measurements);
+    if (Object.keys(measurements).length > 0) {
+      const missing = TYPE_CONFIG[type].required.filter(k => !(k in measurements));
+      const errors = missing.length ? [`"ONE SIZE" is missing required fields: ${missing.join(', ')}`] : [];
+      return { sizes: { 'ONE SIZE': measurements }, errors };
+    }
+  }
   if (sizeIdx === -1) {
     return { sizes: {}, errors: ['No "size" column found in header row.'] };
   }
 
   // Map each column index to its output field name.
-  // Strip a leading "(Garment) " or "[Variant] " prefix so "(Blouse) Bust" / "[IND] Bust" → "bust" etc.
-  // Combined tops+pants charts prefix each column with the garment it belongs to
-  // (e.g. "トップス身幅" / "パンツ股下"). Strip that prefix so the bare field name
-  // ("身幅" / "股下") resolves against the map.
-  const GARMENT_PREFIX_JA = /^(?:パンツ|トップス|ボトムス|スカート|ワンピース)/;
-
   const indexToField = {};
   headers.forEach((h, i) => {
     if (i === sizeIdx) return;
-    const stripped = h.replace(/^(?:[(（][^)）]+[)）]|\[[^\]]+\])\s*/, '')  // strip leading qualifier
-                      .replace(/\s*[(（][^)）]+[)）]$/, '').trim();            // strip trailing qualifier (inc. full-width （）)
-    const strippedGarment = stripped.replace(GARMENT_PREFIX_JA, '');
-    const field = colMap[h] ?? colMap[stripped] ?? colMap[strippedGarment];
+    const field = fieldForHeader(h);
     if (field && !(i in indexToField)) indexToField[i] = field;
   });
 
@@ -1038,6 +1089,12 @@ function parseSingleLine(rawText, type, takeHalf) {
           if (!(k in measurements)) measurements[k] = v;
         }
       }
+      // Segment splitting only handles comma/slash-delimited fields; when multiple
+      // "Field: value" pairs are separated by plain spaces instead (e.g. "Shoulder
+      // width: 64.5cm Chest width: 70.5cm"), scan the whole line for every match.
+      if (colMap) for (const [k, v] of Object.entries(extractKnownFieldPairs(line, colMap))) {
+        if (!(k in measurements)) measurements[k] = v;
+      }
       storeMeasurements(sizeLabel, measurements);
       continue;
     }
@@ -1052,10 +1109,12 @@ function parseSingleLine(rawText, type, takeHalf) {
           if (!(k in sizes[lastSizeLabel])) sizes[lastSizeLabel][k] = v;
         }
       }
+      for (const [k, v] of Object.entries(extractKnownFieldPairs(line, colMap))) {
+        if (!(k in sizes[lastSizeLabel])) sizes[lastSizeLabel][k] = v;
+      }
       continue;
     }
 
-    pendingLabel = null;
     const segments = measurementStr.split(/[/,、・]/).map(s => s.replace(/^[■●▪□◆◇]+/, '').trim()).filter(Boolean);
     const measurements = {};
     for (const seg of segments) {
@@ -1063,6 +1122,20 @@ function parseSingleLine(rawText, type, takeHalf) {
         if (!(k in measurements)) measurements[k] = v;
       }
     }
+    if (colMap) for (const [k, v] of Object.entries(extractKnownFieldPairs(measurementStr, colMap))) {
+      if (!(k in measurements)) measurements[k] = v;
+    }
+
+    if (Object.keys(measurements).length === 0) {
+      // No known field was found in the value side at all (regardless of whether
+      // it contains digits — a size code like "02/M" does) — this "label: value"
+      // line was actually a size-label declaration (e.g. "SIZE: S/M"), not a
+      // measurement line. Use the value as the label for the lines that follow.
+      pendingLabel = measurementStr;
+      continue;
+    }
+
+    pendingLabel = null;
     storeMeasurements(label, measurements);
   }
 
