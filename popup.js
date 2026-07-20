@@ -1825,6 +1825,7 @@ const yukiBtn   = document.getElementById('yuki-btn');
 const sleeveBtn = document.getElementById('sleeve-btn');
 const tableBtn  = document.getElementById('table-btn');
 const copyBtn   = document.getElementById('copy-btn');
+const sendBtn   = document.getElementById('send-btn');
 const inputText = document.getElementById('input-text');
 const typeSelect = document.getElementById('type-select');
 const outputSection = document.getElementById('output-section');
@@ -1863,6 +1864,9 @@ tableBtn.addEventListener('click', () => {
   tableBtn.classList.toggle('active', tableMode);
 });
 
+let lastParsedSizes = null;
+let lastParsedType = null;
+
 parseBtn.addEventListener('click', () => {
   const raw = inputText.value.trim();
   const type = typeSelect.value;
@@ -1881,6 +1885,9 @@ parseBtn.addEventListener('click', () => {
     showError(errors.length ? errors.join('\n') : 'No measurements found. Check the format.');
     return;
   }
+
+  lastParsedSizes = sizes;
+  lastParsedType = type;
 
   outputPre.textContent = tableMode ? toOutputTable(sizes, type) : toOutputJSON(sizes, type);
   outputSection.classList.remove('hidden');
@@ -1904,6 +1911,100 @@ function copyOutputToClipboard() {
 }
 
 copyBtn.addEventListener('click', copyOutputToClipboard);
+
+// Runs inside the active tab's page (via chrome.scripting.executeScript), not
+// in the popup's context — must be self-contained, no closures over popup.js.
+// Merges { sizes, type } into the page's EXISTING product JSON rather than
+// replacing the whole field, so name/brand/product_image/etc. survive.
+async function fillJsonEditorInPage(sizes, type) {
+  const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+  const simulateClick = (el) => {
+    const opts = { bubbles: true, cancelable: true, view: window };
+    el.dispatchEvent(new MouseEvent('mousedown', opts));
+    el.dispatchEvent(new MouseEvent('mouseup', opts));
+    el.dispatchEvent(new MouseEvent('click', opts));
+  };
+  const isEditable = el => el && el.isContentEditable;
+
+  // #json-display may already exist as a read-only rendered view before
+  // "edit" is clicked, so check isContentEditable, not just presence.
+  let editor = document.getElementById('json-display');
+  if (!isEditable(editor)) {
+    const editBtn = document.getElementById('edit-json');
+    if (editBtn) simulateClick(editBtn);
+    for (let i = 0; i < 30 && !isEditable(editor); i++) {
+      await wait(100);
+      editor = document.getElementById('json-display');
+    }
+  }
+  if (!editor) return { ok: false, reason: 'not-found' };
+  if (!isEditable(editor)) return { ok: false, reason: 'not-editable' };
+
+  let existing;
+  try {
+    existing = JSON.parse(editor.textContent);
+  } catch (e) {
+    return { ok: false, reason: 'parse-error', message: e.message };
+  }
+
+  existing.sizes = sizes;
+  existing.type = type;
+
+  editor.focus();
+  editor.textContent = JSON.stringify(existing, null, 2);
+  editor.dispatchEvent(new Event('input', { bubbles: true }));
+  editor.dispatchEvent(new Event('change', { bubbles: true }));
+
+  // Give the page a moment to process the input/change events (e.g. validate
+  // the JSON) before submitting, then click Update.
+  await wait(150);
+  const updateBtn = document.getElementById('update-json');
+  if (updateBtn) simulateClick(updateBtn);
+
+  return { ok: true, updated: !!updateBtn };
+}
+
+function flashSendBtn(label) {
+  sendBtn.textContent = label;
+  setTimeout(() => { sendBtn.textContent = 'Send to page'; }, 1500);
+}
+
+sendBtn.addEventListener('click', async () => {
+  if (!lastParsedSizes) return;
+  if (tableMode) {
+    showError('Switch off Table output before sending to the page — the page expects JSON.');
+    return;
+  }
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: fillJsonEditorInPage,
+      args: [lastParsedSizes, lastParsedType],
+    });
+    if (result && result.ok) {
+      if (result.updated) {
+        flashSendBtn('Updated!');
+      } else {
+        flashSendBtn('Sent!');
+        showError('Filled the JSON but could not find #update-json to submit it — click Update on the page.');
+      }
+    } else if (result && result.reason === 'parse-error') {
+      flashSendBtn('Bad page JSON');
+      showError(`The page's existing JSON didn't parse: ${result.message}`);
+    } else if (result && result.reason === 'not-editable') {
+      flashSendBtn('Not editable');
+      showError('Clicked #edit-json but #json-display never became editable in time.');
+    } else {
+      flashSendBtn('Field not found');
+      showError('Could not find #json-display or #edit-json on this page.');
+    }
+  } catch (e) {
+    console.error('Send to page failed:', e);
+    flashSendBtn('Failed');
+    showError(`Send to page failed: ${e.message}`);
+  }
+});
 
 function showError(msg) {
   errorMsg.textContent = msg;
