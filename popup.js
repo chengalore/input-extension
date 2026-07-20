@@ -179,6 +179,7 @@ const PANTS_COLUMN_MAP = {
   'watari':            'thigh',
   'thigh circumference': 'thigh',
   'thigh width':       'thigh',
+  'crossing':          'thigh',
   'inseam':            'inseam',
   'crotch length':     'inseam',
   'knee':              'knee',
@@ -1740,7 +1741,10 @@ function _invalidSizeStart(c, colMap) {
 }
 
 function _linearColCount(cells, colMap) {
-  const isDecimal = s => /^\d+\.?\d*$/.test(s);
+  // Size labels are sometimes a mix of plain digits and spelled-out numbers
+  // (e.g. "twenty five", "26", "27", "28") — treat both as "numeric" so the
+  // row-start consistency check below doesn't reject a genuinely valid colCount.
+  const isDecimal = s => /^\d+\.?\d*$/.test(s) || parseTextNumber(s) !== null;
   for (let colCount = 2; colCount <= 10 && colCount < cells.length; colCount++) {
     const rowStarts = [];
     let valid = true;
