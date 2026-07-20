@@ -1949,6 +1949,12 @@ async function fillJsonEditorInPage(sizes, type) {
 
   existing.sizes = sizes;
   existing.type = type;
+  // additional_info holds a derived (e.g. x10-scaled) copy of sizes/type that the
+  // page regenerates itself once Update is clicked — clear it out rather than
+  // trying to recompute it here, so it doesn't go stale against the new sizes.
+  if (existing.additional_info && Object.keys(existing.additional_info).length > 0) {
+    existing.additional_info = {};
+  }
 
   editor.focus();
   editor.textContent = JSON.stringify(existing, null, 2);
