@@ -51,10 +51,14 @@ const TYPE_CONFIG = {
     required: ['inseam', 'waist', 'hip', 'thigh'],
     optional: ['knee', 'legOpening', 'frontRise', 'backRise'],
   },
+  shorts: {
+    required: ['inseam', 'waist', 'hip', 'thigh'],
+    optional: ['knee', 'legOpening', 'frontRise', 'backRise'],
+  },
 };
 
 const TOPS_TYPES  = new Set(['shirt', 'tShirt', 'jacket', 'coat', 'dress', 'dressALine', 'tunicSleeve', 'sweater', 'top', 'skirt']);
-const PANTS_TYPES = new Set(['pants']);
+const PANTS_TYPES = new Set(['pants', 'shorts']);
 
 // Column header (lowercase) → output field name, for bags
 const BAG_COLUMN_MAP = {
@@ -239,6 +243,7 @@ const TABLE_FIELD_ORDER = {
   top:         ['height', 'bust', 'waist', 'hem', 'armOpening'],
   skirt:       ['height', 'waist', 'hip', 'hem'],
   pants:       ['inseam', 'waist', 'hip', 'thigh', 'knee', 'legOpening', 'frontRise', 'backRise'],
+  shorts:      ['inseam', 'waist', 'hip', 'thigh', 'knee', 'legOpening', 'frontRise', 'backRise'],
 };
 
 function normalizeMeasurements(measurements, takeHalf) {
@@ -1217,12 +1222,39 @@ function matchGradedField(desc, altDesc = '', type = '') {
   if (/(chest|bust)/.test(d) && !/pocket/.test(d)) return 'bust';
   if (/(bicep|upper sleeve width)/.test(d)) return 'bicep';
   if (/(arm\s*(hole|opening)|armhole)/.test(d)) return 'armOpening';
-  // Only the primary-subject portion before an "@ reference point" counts — e.g.
-  // "Waist Circ. @ hem rib transfer" is a waist measurement referencing hem as a
-  // landmark, not a hem measurement itself (same "reference point" ambiguity as
-  // the hip/waist case below, just via "@" instead of a body-part word).
-  const dBeforeAt = d.split('@')[0];
-  if ((/\bhem\b/.test(dBeforeAt) || (/\bbottom\b/.test(dBeforeAt) && !/width/.test(dBeforeAt))) && !/finished|position|length/.test(d)) return 'hem';
+  // Only the primary-subject portion before an "@ reference point" — and outside
+  // any "(...)" aside — counts. E.g. "Waist Circ. @ hem rib transfer" is a waist
+  // measurement referencing hem as a landmark, and "Inside leg (crotch point to
+  // hem)" is an inseam measurement whose endpoint happens to be called "hem";
+  // neither is a hem measurement itself (same ambiguity as the hip/waist case
+  // below). Parens are stripped only for this check, not from `d` itself — later
+  // checks (e.g. front/back rise "incl. WB") depend on parenthetical content.
+  const dBeforeAt = d.split('@')[0].replace(/\([^)]*\)/g, '');
+  // "Depth" alone (no "Finished") also means the small fold/seam allowance, not
+  // the primary circumference — e.g. "Hem Depth" next to "1/2 Hem - straight".
+  if ((/\bhem\b/.test(dBeforeAt) || (/\bbottom\b/.test(dBeforeAt) && !/width/.test(dBeforeAt))) && !/finished|position|length|depth/.test(d)) {
+    // Pants/shorts call this "leg opening", not "hem" — matches the same
+    // type-based distinction the "bottom width" check below already makes.
+    return PANTS_TYPES.has(type) ? 'legOpening' : 'hem';
+  }
+
+  // Front/back rise — checked BEFORE hip/waist because descriptions like "Front
+  // rise FR. front waist top edge to crotch point" name their own body-part
+  // reference point (here "waist") as part of describing where rise is measured
+  // FROM, not because the row is actually a waist measurement.
+  // "Waist top edge" is an additional phrasing for the same "measured from the
+  // outermost point of the waistband" concept as "from waist edge" — i.e. the
+  // waistband is already included, same as the existing phrase below.
+  if (/front\s*rise/.test(d)) {
+    const inclWB = /incl\.?\s*wb|incl\.?\s*waist.?band|from waist edge|waist top edge/.test(a)
+                || /incl\.?\s*wb|from waist edge|waist top edge/.test(d);
+    return inclWB ? 'frontRise$incl' : 'frontRise$excl';
+  }
+  if (/back.?rise/.test(d)) {
+    const inclWB = /incl\.?\s*wb|incl\.?\s*waist.?band|from waist edge|waist top edge/.test(a)
+                || /incl\.?\s*wb|from waist edge|waist top edge/.test(d);
+    return inclWB ? 'backRise$incl' : 'backRise$excl';
+  }
 
   // Hip (and seat as synonym) — checked BEFORE waist because descriptions like
   // "High Hip @ below waist edge" contain "waist" as a reference point
@@ -1235,7 +1267,11 @@ function matchGradedField(desc, altDesc = '', type = '') {
   // Exclude waistband, position measurements, and horizontal width measurements
   if (/waist/.test(d) && !/band|position|pocket|horizontal|\bto\s+waist\b/.test(d)) {
     if (/relax/.test(d)) return 'waist$relaxed';
-    if (/stretch/.test(d)) return 'waist$stretched';
+    // "Extended ... minimum" describes max elastic stretch capacity, not a fit
+    // measurement method — e.g. "Waist Extended (elastic stretched minimum)" is
+    // a much larger number than the actual waist spec, so it shouldn't outrank
+    // the plain measurement via the stretched > generic priority.
+    if (/stretch/.test(d) && !/extended.*minimum|minimum.*extended/.test(d)) return 'waist$stretched';
     return 'waist$other';
   }
 
@@ -1259,18 +1295,6 @@ function matchGradedField(desc, altDesc = '', type = '') {
 
   // Waistband height/depth — stored internally, used to adjust rise if needed
   if (/waistband/.test(d) && /(height|depth)/.test(d)) return '_waistband';
-
-  // Front/back rise — tag by whether waistband is included
-  if (/front\s*rise/.test(d)) {
-    const inclWB = /incl\.?\s*wb|incl\.?\s*waist.?band|from waist edge/.test(a)
-                || /incl\.?\s*wb|from waist edge/.test(d);
-    return inclWB ? 'frontRise$incl' : 'frontRise$excl';
-  }
-  if (/back.?rise/.test(d)) {
-    const inclWB = /incl\.?\s*wb|incl\.?\s*waist.?band|from waist edge/.test(a)
-                || /incl\.?\s*wb|from waist edge/.test(d);
-    return inclWB ? 'backRise$incl' : 'backRise$excl';
-  }
 
   // Height — tag by reference for priority resolution (not used for pants)
   if (!PANTS_TYPES.has(type) && /\bcbl\b/.test(d)) return 'height$cb'; // Center Back Length abbreviation
