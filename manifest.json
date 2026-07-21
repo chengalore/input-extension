@@ -7,5 +7,5 @@
     "default_popup": "popup.html",
     "default_title": "Measurement Parser"
   },
-  "permissions": ["clipboardWrite", "activeTab", "scripting"]
+  "permissions": ["clipboardWrite", "activeTab", "scripting", "storage"]
 }

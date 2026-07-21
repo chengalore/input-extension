@@ -477,22 +477,33 @@ function tryParsePomSheet(rows, type, takeHalf) {
 // Detection: a line with >= 3 pure-integer tab cells, with "description" in a nearby preceding line.
 // The dim code (e.g. BW005) is col 0; the human description is col 1; size values are the last N cols.
 
+// Same synonyms parseGraded's descIdx accepts — "Measuring Point" is standard
+// tech-pack terminology for the description column, not just literal "Description".
+const SPEC_SHEET_DESC_HEADER_RE = /^(description|pom\s*name|measuring\s*point|point\s*of\s*measure)$/i;
+// Size codes are sometimes numeric grading (28, 30, 32) and sometimes letter
+// sizes (XS, S, M, L, XL, 2XL) — accept either, not just pure integers.
+const SPEC_SHEET_SIZE_CODE_RE = /^(?:xxxs|xxs|xs|s|m|l|xl|xxl|2xl|3xl|xxxl|\d+)$/i;
+
 function tryParseSpecSheet(lines, type, takeHalf) {
   let sizeLabelLineIdx = -1;
   let sizeLabels = [];
+  let descColIdx = 1; // legacy default: dim code in col 0, description in col 1
 
   for (let i = 0; i < lines.length; i++) {
     const cells = lines[i].split('\t').map(c => c.trim());
-    const intCells = cells.filter(c => /^\d+$/.test(c));
+    const intCells = cells.filter(c => SPEC_SHEET_SIZE_CODE_RE.test(c));
     if (intCells.length < 3) continue;
     const windowStart = Math.max(0, i - 2);
     const nearby = lines.slice(windowStart, i + 1);
-    const hasDesc = nearby.some(l =>
-      l.split('\t').map(c => c.trim().toLowerCase()).includes('description')
-    );
-    if (hasDesc) {
+    let foundDescIdx = -1;
+    for (const l of nearby) {
+      const idx = l.split('\t').map(c => c.trim()).findIndex(c => SPEC_SHEET_DESC_HEADER_RE.test(c));
+      if (idx !== -1) { foundDescIdx = idx; break; }
+    }
+    if (foundDescIdx !== -1) {
       sizeLabelLineIdx = i;
       sizeLabels = intCells;
+      descColIdx = foundDescIdx;
       break;
     }
   }
@@ -513,15 +524,21 @@ function tryParseSpecSheet(lines, type, takeHalf) {
     const valueCells = cols.slice(cols.length - numSizes);
     if (!valueCells.some(c => /\d/.test(c))) continue;
 
-    const desc = cols[1] ?? '';
+    const desc = cols[descColIdx] ?? '';
     const descNorm = desc.toLowerCase()
       .replace(/\s*\*[^*]*\*/g, '')  // strip *BOTTOMS* style annotations
       .replace(/\s*\([^)]*\)/g, '')  // strip (mini), (measured along hem), etc.
       .trim();
 
+    // Direct column-map lookups handle terse descriptions ("Bust", "(Blouse) Bust");
+    // matchGradedField is the fallback for verbose tech-pack phrasing this sheet
+    // uses instead ("1/2 Chest Circ. @ underarm SEAM", "Shoulder to shoulder at
+    // FOLD - SEAM TO SEAM") — it may return a tagged intermediate value (e.g.
+    // "waist$relaxed", "height$cf") resolved by priority below, same as parseGraded.
     const field = colMap[descNorm]
       ?? colMap[descNorm.replace(/^(?:skirt|pant|pants|top|jacket|coat|dress)\s+/i, '').trim()]
-      ?? colMap[descNorm.replace(/\s+(?:cf|cb|side seam)\b.*/i, '').trim()];
+      ?? colMap[descNorm.replace(/\s+(?:cf|cb|side seam)\b.*/i, '').trim()]
+      ?? matchGradedField(desc, '', type);
     if (!field) continue;
 
     sizeLabels.forEach((size, si) => {
@@ -532,14 +549,36 @@ function tryParseSpecSheet(lines, type, takeHalf) {
 
   for (const [sizeLabel, measurements] of Object.entries(sizes)) {
     if (Object.keys(measurements).length === 0) { delete sizes[sizeLabel]; continue; }
+
+    // Resolve matchGradedField's tagged intermediate values, same priority
+    // resolution parseGraded applies (waist relaxed > stretched > generic,
+    // hip low > high, front/back rise incl/excl waistband, height by reference).
+    for (const key of WAIST_PRIORITY) { if (key in measurements) { measurements.waist = measurements[key]; break; } }
+    for (const key of WAIST_PRIORITY) delete measurements[key];
+
+    for (const key of HIP_PRIORITY) { if (key in measurements) { measurements.hip = measurements[key]; break; } }
+    for (const key of HIP_PRIORITY) delete measurements[key];
+
     normalizeMeasurements(measurements, takeHalf);
+
+    const wb = measurements._waistband ?? 0;
+    delete measurements._waistband;
+    if ('frontRise$incl' in measurements) measurements.frontRise = measurements['frontRise$incl'];
+    else if ('frontRise$excl' in measurements) measurements.frontRise = measurements['frontRise$excl'] + wb;
+    if ('backRise$incl' in measurements) measurements.backRise = measurements['backRise$incl'];
+    else if ('backRise$excl' in measurements) measurements.backRise = measurements['backRise$excl'] + wb;
+    for (const key of RISE_TAGS) delete measurements[key];
+
+    for (const key of HEIGHT_PRIORITY) { if (key in measurements) { measurements.height = measurements[key]; break; } }
+    for (const key of HEIGHT_PRIORITY) delete measurements[key];
+
     computeSleeve(measurements);
     const missing = TYPE_CONFIG[type].required.filter(k => !(k in measurements));
     if (missing.length) errors.push(`"${sizeLabel}" is missing required fields: ${missing.join(', ')}`);
   }
 
   if (Object.keys(sizes).length === 0) return null;
-  return { sizes, errors };
+  return { sizes: expandInseamCombinations(sizes), errors };
 }
 
 // ─── Tabular parser (shirt / tShirt / jacket / coat) ─────────────────────────
@@ -1178,7 +1217,12 @@ function matchGradedField(desc, altDesc = '', type = '') {
   if (/(chest|bust)/.test(d) && !/pocket/.test(d)) return 'bust';
   if (/(bicep|upper sleeve width)/.test(d)) return 'bicep';
   if (/(arm\s*(hole|opening)|armhole)/.test(d)) return 'armOpening';
-  if ((/\bhem\b/.test(d) || (/\bbottom\b/.test(d) && !/width/.test(d))) && !/finished|position|length/.test(d)) return 'hem';
+  // Only the primary-subject portion before an "@ reference point" counts — e.g.
+  // "Waist Circ. @ hem rib transfer" is a waist measurement referencing hem as a
+  // landmark, not a hem measurement itself (same "reference point" ambiguity as
+  // the hip/waist case below, just via "@" instead of a body-part word).
+  const dBeforeAt = d.split('@')[0];
+  if ((/\bhem\b/.test(dBeforeAt) || (/\bbottom\b/.test(dBeforeAt) && !/width/.test(dBeforeAt))) && !/finished|position|length/.test(d)) return 'hem';
 
   // Hip (and seat as synonym) — checked BEFORE waist because descriptions like
   // "High Hip @ below waist edge" contain "waist" as a reference point
@@ -1840,32 +1884,42 @@ let takeHalf = false;
 halfBtn.addEventListener('click', () => {
   takeHalf = !takeHalf;
   halfBtn.classList.toggle('active', takeHalf);
+  saveState();
 });
 
 let yukiAsSleeve = false;
-yukiBtn.addEventListener('click', () => {
-  yukiAsSleeve = !yukiAsSleeve;
+function applyYukiToggle(value) {
+  yukiAsSleeve = value;
   yukiBtn.classList.toggle('active', yukiAsSleeve);
   TOPS_COLUMN_MAP['yuki']     = yukiAsSleeve ? 'sleeve' : 'sleeve_length';
   TOPS_COLUMN_MAP['yukitake'] = yukiAsSleeve ? 'sleeve' : 'sleeve_length';
   TOPS_COLUMN_MAP['ゆき']    = yukiAsSleeve ? 'sleeve' : 'sleeve_length';
   TOPS_COLUMN_MAP['ゆき丈']  = yukiAsSleeve ? 'sleeve' : 'sleeve_length';
+}
+yukiBtn.addEventListener('click', () => {
+  applyYukiToggle(!yukiAsSleeve);
+  saveState();
 });
 
 let sleeveAsArm = false;
-sleeveBtn.addEventListener('click', () => {
-  sleeveAsArm = !sleeveAsArm;
+function applySleeveToggle(value) {
+  sleeveAsArm = value;
   sleeveBtn.classList.toggle('active', sleeveAsArm);
   const sleeveTarget = sleeveAsArm ? 'sleeve' : 'sleeve_length';
   for (const key of ['sleeve length', '袖丈', '소매길이']) {
     TOPS_COLUMN_MAP[key] = sleeveTarget;
   }
+}
+sleeveBtn.addEventListener('click', () => {
+  applySleeveToggle(!sleeveAsArm);
+  saveState();
 });
 
 let tableMode = false;
 tableBtn.addEventListener('click', () => {
   tableMode = !tableMode;
   tableBtn.classList.toggle('active', tableMode);
+  saveState();
 });
 
 let lastParsedSizes = null;
@@ -1896,10 +1950,19 @@ parseBtn.addEventListener('click', () => {
   outputPre.textContent = tableMode ? toOutputTable(sizes, type) : toOutputJSON(sizes, type);
   outputSection.classList.remove('hidden');
   copyOutputToClipboard();
+  saveState();
 
   if (errors.length) {
     showError(errors.join('\n'));
   }
+});
+
+typeSelect.addEventListener('change', saveState);
+
+let saveInputTimer = null;
+inputText.addEventListener('input', () => {
+  clearTimeout(saveInputTimer);
+  saveInputTimer = setTimeout(saveState, 300);
 });
 
 function copyOutputToClipboard() {
@@ -2020,3 +2083,55 @@ function showError(msg) {
   errorMsg.textContent = msg;
   errorMsg.classList.remove('hidden');
 }
+
+// Chrome tears down the popup's entire JS context every time it closes — which
+// happens on any loss of focus (clicking the page, switching tabs, clicking
+// "edit" yourself before Send to page). Without persisting state, that wipes
+// the pasted text and the last parsed result, forcing a re-paste + re-parse
+// on next open even though nothing the user did should have lost that work.
+const STORAGE_KEY = 'measurementParserState';
+
+function saveState() {
+  chrome.storage.local.set({
+    [STORAGE_KEY]: {
+      inputText: inputText.value,
+      type: typeSelect.value,
+      takeHalf,
+      yukiAsSleeve,
+      sleeveAsArm,
+      tableMode,
+      lastParsedSizes,
+      lastParsedType,
+      outputText: outputPre.textContent,
+      outputVisible: !outputSection.classList.contains('hidden'),
+    },
+  });
+}
+
+async function restoreState() {
+  const result = await chrome.storage.local.get(STORAGE_KEY);
+  const s = result[STORAGE_KEY];
+  if (!s) return;
+
+  if (s.inputText) inputText.value = s.inputText;
+  if (s.type) typeSelect.value = s.type;
+
+  takeHalf = !!s.takeHalf;
+  halfBtn.classList.toggle('active', takeHalf);
+
+  applyYukiToggle(!!s.yukiAsSleeve);
+  applySleeveToggle(!!s.sleeveAsArm);
+
+  tableMode = !!s.tableMode;
+  tableBtn.classList.toggle('active', tableMode);
+
+  lastParsedSizes = s.lastParsedSizes ?? null;
+  lastParsedType = s.lastParsedType ?? null;
+
+  if (s.outputText) {
+    outputPre.textContent = s.outputText;
+    if (s.outputVisible) outputSection.classList.remove('hidden');
+  }
+}
+
+restoreState();
