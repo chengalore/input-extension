@@ -35,6 +35,10 @@ const TYPE_CONFIG = {
     required: ['height', 'bust'],
     optional: ['shoulder', 'sleeve_length', 'sleeve', 'waist', 'waistHeight', 'hip', 'hem'],
   },
+  dressSleeve: {
+    required: ['height', 'bust', 'sleeve_length'],
+    optional: ['shoulder', 'sleeve', 'waist', 'waistHeight', 'hip', 'hem'],
+  },
   tunicSleeve: {
     required: ['height', 'bust'],
     optional: ['shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem'],
@@ -57,7 +61,7 @@ const TYPE_CONFIG = {
   },
 };
 
-const TOPS_TYPES  = new Set(['shirt', 'tShirt', 'jacket', 'coat', 'dress', 'dressALine', 'tunicSleeve', 'sweater', 'top', 'skirt']);
+const TOPS_TYPES  = new Set(['shirt', 'tShirt', 'jacket', 'coat', 'dress', 'dressALine', 'dressSleeve', 'tunicSleeve', 'sweater', 'top', 'skirt']);
 const PANTS_TYPES = new Set(['pants', 'shorts']);
 
 // Column header (lowercase) → output field name, for bags
@@ -73,6 +77,11 @@ const BAG_COLUMN_MAP = {
   'length':     'height',
   'long':       'height',
   'side width': 'depth',
+  // Single-letter abbreviations (H/W/D/L, common in quick dimension listings)
+  'h':  'height',
+  'w':  'width',
+  'd':  'depth',
+  'l':  'height',
   // Japanese bag field names
   '横':    'width',
   '幅':    'width',
@@ -120,6 +129,7 @@ const TOPS_COLUMN_MAP = {
   'hem':              'hem',
   'hem width':        'hem',
   'sleeve width':     'bicep',
+  'sleeve circumference': 'bicep',
   'bicep':            'bicep',
   'arm opening':      'armOpening',
   'armhole':          'armOpening',
@@ -239,6 +249,7 @@ const TABLE_FIELD_ORDER = {
   sweater:        ['height', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem', 'bicep'],
   dress:       ['height', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'waist', 'waistHeight', 'hip', 'hem'],
   dressALine:  ['height', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'waist', 'waistHeight', 'hip', 'hem'],
+  dressSleeve: ['height', 'bust', 'sleeve_length', 'shoulder', 'sleeve', 'waist', 'waistHeight', 'hip', 'hem'],
   tunicSleeve: ['height', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem'],
   top:         ['height', 'bust', 'waist', 'hem', 'armOpening'],
   skirt:       ['height', 'waist', 'hip', 'hem'],
@@ -485,9 +496,11 @@ function tryParsePomSheet(rows, type, takeHalf) {
 // Same synonyms parseGraded's descIdx accepts — "Measuring Point" is standard
 // tech-pack terminology for the description column, not just literal "Description".
 const SPEC_SHEET_DESC_HEADER_RE = /^(description|pom\s*name|measuring\s*point|point\s*of\s*measure)$/i;
-// Size codes are sometimes numeric grading (28, 30, 32) and sometimes letter
-// sizes (XS, S, M, L, XL, 2XL) — accept either, not just pure integers.
-const SPEC_SHEET_SIZE_CODE_RE = /^(?:xxxs|xxs|xs|s|m|l|xl|xxl|2xl|3xl|xxxl|\d+)$/i;
+// Size codes are sometimes numeric grading (28, 30, 32), sometimes letter sizes
+// (XS, S, M, L, XL, 2XL), and sometimes compound straddle sizes (XS/S, S/M,
+// M/L) — accept all three, not just single pure-integer or single-letter codes.
+const SPEC_SHEET_SIZE_UNIT_RE = 'xxxs|xxs|xs|s|m|l|xl|xxl|2xl|3xl|xxxl|\\d+';
+const SPEC_SHEET_SIZE_CODE_RE = new RegExp(`^(?:${SPEC_SHEET_SIZE_UNIT_RE})(?:/(?:${SPEC_SHEET_SIZE_UNIT_RE}))*$`, 'i');
 
 function tryParseSpecSheet(lines, type, takeHalf) {
   let sizeLabelLineIdx = -1;
@@ -540,10 +553,16 @@ function tryParseSpecSheet(lines, type, takeHalf) {
     // uses instead ("1/2 Chest Circ. @ underarm SEAM", "Shoulder to shoulder at
     // FOLD - SEAM TO SEAM") — it may return a tagged intermediate value (e.g.
     // "waist$relaxed", "height$cf") resolved by priority below, same as parseGraded.
+    // matchGradedField runs BEFORE the "strip trailing cf/cb/side seam" fallback:
+    // that fallback greedily strips everything from "cf"/"cb" onward, so on a
+    // long description like "Total CF length - neck fold edge to hem edge" it
+    // collapses all the way down to "total", which matches the plain (untagged)
+    // 'total' -> height key directly — bypassing matchGradedField's proper
+    // total_cf/total_cb/total_other tagging and corrupting priority resolution.
     const field = colMap[descNorm]
       ?? colMap[descNorm.replace(/^(?:skirt|pant|pants|top|jacket|coat|dress)\s+/i, '').trim()]
-      ?? colMap[descNorm.replace(/\s+(?:cf|cb|side seam)\b.*/i, '').trim()]
-      ?? matchGradedField(desc, '', type);
+      ?? matchGradedField(desc, '', type)
+      ?? colMap[descNorm.replace(/\s+(?:cf|cb|side seam)\b.*/i, '').trim()];
     if (!field) continue;
 
     sizeLabels.forEach((size, si) => {
@@ -893,8 +912,12 @@ function parseTabular(rawText, type, takeHalf) {
 const QUALIFIER_LABEL = /^(?:approx\.?|size)$/i;
 
 function normalizeLabel(raw) {
+  // Strip a leading list-bullet marker — markdown "- "/"* " (space required, so
+  // a genuine leading hyphen like "-1" isn't mistaken for a bullet) or a CJK
+  // bullet char (■●▪□◆◇・, no space required, matching existing convention).
+  const debulleted = raw.trim().replace(/^(?:[-*]\s+|[■●▪□◆◇・]\s*)/, '');
   // Strip "Size " / "size " prefix — e.g. "Size S" → "S", "Size M" → "M"
-  const label = raw.trim().replace(/^size\s+/i, '') || raw.trim();
+  const label = debulleted.replace(/^size\s+/i, '') || debulleted;
   return QUALIFIER_LABEL.test(label) ? 'ONE SIZE' : label;
 }
 
@@ -1078,10 +1101,6 @@ function parseSegment(segment, type) {
 }
 
 function parseSingleLine(rawText, type, takeHalf) {
-  const lines = joinContinuationLines(rawText).filter(l => l.trim());
-  const sizes = {};
-  const errors = [];
-
   // Column map used to detect when a line's label is itself a field name
   // (e.g. "F\nHeight: 30cm, Width: 42.5cm" — "Height" is a bag field, "F" is the size label).
   const colMap = type === 'bag' ? BAG_COLUMN_MAP
@@ -1089,15 +1108,36 @@ function parseSingleLine(rawText, type, takeHalf) {
                : PANTS_TYPES.has(type) ? PANTS_COLUMN_MAP
                : null;
 
+  // "Field: num1/num2" — two slash-separated values for one field (e.g.
+  // "Total length: 34/121") — use the second number. Collapsed here, before the
+  // rest of the pipeline splits on "/" as a generic segment separator, which
+  // would otherwise treat num1 and num2 as unrelated fragments.
+  rawText = rawText.replace(/([:：]\s*)\d+\.?\d*\s*\/\s*(\d+\.?\d*)/g, '$1$2');
+
+  const lines = joinWrappedLabelLines(joinContinuationLines(rawText).filter(l => l.trim()), colMap);
+  const sizes = {};
+  const errors = [];
+
   let pendingLabel = null;
   let lastSizeLabel = null;
+  // Accumulates fields for a bare "Field: value" listing with no size line at
+  // all (e.g. "H: 30cm / W: 63cm / D: 26cm") — flushed through storeMeasurements
+  // once at the end so normalization/sleeve-computation/missing-field checks
+  // still apply, same as any other size.
+  let implicitOneSize = null;
 
+  // Missing-required-field errors are computed in one final pass after the loop,
+  // not here — a size's fields are sometimes spread across multiple lines (each
+  // merged into sizes[lastSizeLabel] in place by the branch below, without going
+  // back through storeMeasurements), so checking immediately on the first line
+  // would flag fields as "missing" that a later line fills in moments later.
+  // normalizeMeasurements (the "take half" toggle) and computeSleeve are deferred
+  // to the final pass below too — a size's fields are sometimes spread across
+  // multiple lines, and later ones are merged directly into sizes[lastSizeLabel]
+  // bypassing this function entirely, so halving here would only ever apply to
+  // whatever handful of fields happened to be present on the very first line.
   const storeMeasurements = (sizeLabel, measurements) => {
-    normalizeMeasurements(measurements, takeHalf);
-    computeSleeve(measurements);
     if (Object.keys(measurements).length === 0) return;
-    const missing = TYPE_CONFIG[type].required.filter(k => !(k in measurements));
-    if (missing.length) errors.push(`"${sizeLabel}" is missing required fields: ${missing.join(', ')}`);
     sizes[sizeLabel] = measurements;
     lastSizeLabel = sizeLabel;
   };
@@ -1153,18 +1193,38 @@ function parseSingleLine(rawText, type, takeHalf) {
       continue;
     }
 
-    // If the label is a known field name with no pending label, this is a stray
-    // continuation line (e.g. "Waist: 63cm" after a line that ended with a comma).
-    // Merge it into the last size rather than creating a bogus "Waist" size entry.
-    if (!pendingLabel && colMap && label.toLowerCase() in colMap && lastSizeLabel) {
+    // If the label is a known field name with no pending label, this is either a
+    // stray continuation line for the current size (e.g. "Waist: 63cm" after a
+    // line that ended with a comma) — merge into the last size rather than
+    // creating a bogus "Waist" size entry — or, if no size has been declared at
+    // all yet (e.g. a bare "H: 30cm" / "W: 63cm" / "D: 26cm" listing with no
+    // size line), accumulate into an implicit "ONE SIZE" entry instead.
+    if (!pendingLabel && colMap && label.toLowerCase() in colMap && (lastSizeLabel || implicitOneSize)) {
+      const target = lastSizeLabel ? sizes[lastSizeLabel] : implicitOneSize;
       const segments = line.split(/[,、]/).map(s => s.trim()).filter(Boolean);
       for (const seg of segments) {
         for (const [k, v] of Object.entries(parseSegment(seg, type))) {
-          if (!(k in sizes[lastSizeLabel])) sizes[lastSizeLabel][k] = v;
+          if (!(k in target)) target[k] = v;
         }
       }
       for (const [k, v] of Object.entries(extractKnownFieldPairs(line, colMap))) {
-        if (!(k in sizes[lastSizeLabel])) sizes[lastSizeLabel][k] = v;
+        if (!(k in target)) target[k] = v;
+      }
+      continue;
+    }
+
+    // First field-only line with no size context established yet — start the
+    // implicit "ONE SIZE" accumulator (flushed through storeMeasurements below).
+    if (!pendingLabel && colMap && label.toLowerCase() in colMap) {
+      implicitOneSize = {};
+      const segments = line.split(/[,、]/).map(s => s.trim()).filter(Boolean);
+      for (const seg of segments) {
+        for (const [k, v] of Object.entries(parseSegment(seg, type))) {
+          if (!(k in implicitOneSize)) implicitOneSize[k] = v;
+        }
+      }
+      for (const [k, v] of Object.entries(extractKnownFieldPairs(line, colMap))) {
+        if (!(k in implicitOneSize)) implicitOneSize[k] = v;
       }
       continue;
     }
@@ -1193,6 +1253,15 @@ function parseSingleLine(rawText, type, takeHalf) {
     storeMeasurements(label, measurements);
   }
 
+  if (implicitOneSize) storeMeasurements('ONE SIZE', implicitOneSize);
+
+  for (const [sizeLabel, measurements] of Object.entries(sizes)) {
+    normalizeMeasurements(measurements, takeHalf);
+    computeSleeve(measurements);
+    const missing = TYPE_CONFIG[type].required.filter(k => !(k in measurements));
+    if (missing.length) errors.push(`"${sizeLabel}" is missing required fields: ${missing.join(', ')}`);
+  }
+
   return { sizes, errors };
 }
 
@@ -1200,7 +1269,7 @@ function parseSingleLine(rawText, type, takeHalf) {
 
 // Height priority tags — resolved after all rows are processed
 // Priority: HPS+CB > HPS > CB > CF > other
-const HEIGHT_PRIORITY = ['height$hps_cb', 'height$cf', 'height$cb', 'height$hps', 'height$full', 'height$other'];
+const HEIGHT_PRIORITY = ['height$total_cf', 'height$total_cb', 'height$total_other', 'height$hps_cb', 'height$cf', 'height$cb', 'height$hps', 'height$full', 'height$other'];
 
 // Map description + alt-description → output field. Order matters: specific first.
 function matchGradedField(desc, altDesc = '', type = '') {
@@ -1256,6 +1325,31 @@ function matchGradedField(desc, altDesc = '', type = '') {
     return inclWB ? 'backRise$incl' : 'backRise$excl';
   }
 
+  // Height — checked BEFORE hip/waist for the same reason as rise above: e.g.
+  // "CF Skirt Length from waist edge to scallop base point" names itself as a
+  // Length measurement but mentions "waist edge" as its starting reference
+  // point, which would otherwise be caught by the generic waist-check below.
+  if (!PANTS_TYPES.has(type) && /\bcbl\b/.test(d)) return 'height$cb'; // Center Back Length abbreviation
+  if (!PANTS_TYPES.has(type) && /length/.test(d)) {
+    const hasHps = /from (hps|highest point shoulder)/.test(d);
+    const hasCb  = /(cb|centre back|center back|\bback\b)/.test(d);
+    const hasCf  = /(cf|centre front|center front|\bfront\b)/.test(d);
+    // "Total [CF/CB] length" outranks a plain CF/CB-referenced length — e.g. a
+    // sheet can have both "CF Bodice length ... to waist seam" (partial) and
+    // "Total CF length ... to hem edge" (the actual overall garment length);
+    // without this, the partial one wins just by appearing first in the table.
+    if (/\btotal\b/.test(d)) {
+      if (hasCf) return 'height$total_cf';
+      if (hasCb) return 'height$total_cb';
+      return 'height$total_other';
+    }
+    if (hasHps && hasCb) return 'height$hps_cb';
+    if (hasHps)          return 'height$hps';
+    if (hasCb)           return 'height$cb';
+    if (hasCf)           return 'height$cf';
+    if (/(full|body|total) length/.test(d)) return 'height$full';
+  }
+
   // Hip (and seat as synonym) — checked BEFORE waist because descriptions like
   // "High Hip @ below waist edge" contain "waist" as a reference point
   if (/(\bhip\b|\bseat\b)/.test(d) && !/position/.test(d)) {
@@ -1264,8 +1358,10 @@ function matchGradedField(desc, altDesc = '', type = '') {
   }
 
   // Waist — tagged for priority: relaxed > stretched > generic
-  // Exclude waistband, position measurements, and horizontal width measurements
-  if (/waist/.test(d) && !/band|position|pocket|horizontal|\bto\s+waist\b/.test(d)) {
+  // Exclude waistband, position measurements, horizontal width measurements, and
+  // facing/construction depth (e.g. "Waist Facing Depth" is a finish allowance,
+  // not a circumference — same "depth" exclusion already applied to hem).
+  if (/waist/.test(d) && !/band|position|pocket|horizontal|depth|\bto\s+waist\b/.test(d)) {
     if (/relax/.test(d)) return 'waist$relaxed';
     // "Extended ... minimum" describes max elastic stretch capacity, not a fit
     // measurement method — e.g. "Waist Extended (elastic stretched minimum)" is
@@ -1295,19 +1391,6 @@ function matchGradedField(desc, altDesc = '', type = '') {
 
   // Waistband height/depth — stored internally, used to adjust rise if needed
   if (/waistband/.test(d) && /(height|depth)/.test(d)) return '_waistband';
-
-  // Height — tag by reference for priority resolution (not used for pants)
-  if (!PANTS_TYPES.has(type) && /\bcbl\b/.test(d)) return 'height$cb'; // Center Back Length abbreviation
-  if (!PANTS_TYPES.has(type) && /length/.test(d)) {
-    const hasHps = /from (hps|highest point shoulder)/.test(d);
-    const hasCb  = /(cb|centre back|center back|\bback\b)/.test(d);
-    const hasCf  = /(cf|centre front|center front|\bfront\b)/.test(d);
-    if (hasHps && hasCb) return 'height$hps_cb';
-    if (hasHps)          return 'height$hps';
-    if (hasCb)           return 'height$cb';
-    if (hasCf)           return 'height$cf';
-    if (/(full|body|total) length/.test(d)) return 'height$full';
-  }
 
   return null;
 }
@@ -1667,6 +1750,34 @@ function parseFieldValueLines(rawText, type, takeHalf) {
 function isBlockFormat(rawText) {
   // Only treat as block if [label] appears on a line by itself (no measurement content after it)
   return /^\[.+\]\s*$/m.test(rawText);
+}
+
+// Join a bare label line (no colon) that got line-wrapped mid-field-name onto the
+// following line, e.g. "Shoulder\nwidth: 34 Sleeve length: 41" — "Shoulder" alone
+// isn't a recognized field, but "Shoulder width" is, so the two lines are one
+// field name split by a copy-paste line break. Only joins when the combined text
+// (this line + the next line's portion before its own colon) is a KNOWN field
+// name, to avoid false positives on unrelated bare lines (size labels, etc).
+function joinWrappedLabelLines(lines, colMap) {
+  if (!colMap) return lines;
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const next = lines[i + 1];
+    if (!/[:：]/.test(line) && next) {
+      const colonIdx = next.search(/[:：]/);
+      if (colonIdx !== -1) {
+        const combined = `${line.trim()} ${next.slice(0, colonIdx).trim()}`.toLowerCase();
+        if (combined in colMap) {
+          out.push(`${line.trim()} ${next.trim()}`);
+          i++;
+          continue;
+        }
+      }
+    }
+    out.push(line);
+  }
+  return out;
 }
 
 // Join lines starting with ':' or ',' onto the previous line (handles mid-field line breaks).
