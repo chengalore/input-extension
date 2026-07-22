@@ -950,6 +950,19 @@ function parseSegment(segment, type) {
     return result;
   }
 
+  // Bare "W x H x D [cm]" with no labels, letters, or parens at all — e.g.
+  // "26x18x3.5cm". Same width/height/depth order as the parenMatch case above,
+  // for consistency, since there's no other signal to go on.
+  const bareTripleMatch = segment.match(/^([\d.]+)\s*[xX×]\s*([\d.]+)\s*[xX×]\s*([\d.]+)\s*(?:cm|mm|in|inch)?\s*$/i);
+  if (bareTripleMatch) {
+    if (type === 'bag') {
+      result.width = parseFloat(bareTripleMatch[1]);
+      result.height = parseFloat(bareTripleMatch[2]);
+      result.depth = parseFloat(bareTripleMatch[3]);
+    }
+    return result;
+  }
+
   // "Dimensions: H x W [cm]" — first = height, second = width
   const dimMatch = segment.match(/^dimensions?\s*:\s*([\d.]+)\s*[xX×]\s*([\d.]+)/i);
   if (dimMatch) {
