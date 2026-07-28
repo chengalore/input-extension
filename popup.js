@@ -1045,6 +1045,17 @@ function parseSegment(segment, type) {
       }
       return result;
     }
+    // "{num}" {letter}" format — e.g. 3.75" H x 4.25" L. — the " marks inches,
+    // so convert to cm (this tool's implicit unit throughout) rather than
+    // storing the raw inch value.
+    const inchLetterDims = [...segment.matchAll(/(\d+\.?\d*)\s*"\s*([HWLDhwld])\b/g)];
+    if (inchLetterDims.length > 0) {
+      for (const [, num, letter] of inchLetterDims) {
+        const field = LETTER_MAP[letter.toLowerCase()];
+        if (field && !(field in result)) result[field] = Math.round(parseFloat(num) * 2.54 * 100) / 100;
+      }
+      return result;
+    }
   }
 
   // Named tops measurements — e.g. "Shoulder width 52.5", "Dress Bust 106cm", "Length 69 (cm)"
@@ -1708,12 +1719,18 @@ function isFieldValueFormat(rawText, type) {
   const firstLine = rawText.trim().split('\n')[0];
   const split = splitLine(firstLine);
   if (!split) return false;
-  const [label] = split;
+  const [label, valueStr] = split;
   const colMap = type === 'bag' ? BAG_COLUMN_MAP
                : TOPS_TYPES.has(type) ? TOPS_COLUMN_MAP
                : PANTS_TYPES.has(type) ? PANTS_COLUMN_MAP
                : null;
-  return colMap ? label.toLowerCase() in colMap : false;
+  if (!colMap || !(label.toLowerCase() in colMap)) return false;
+  // If the value side itself contains ANOTHER recognized field (e.g.
+  // "Length: 52cm / Width: 45cm" — "/" here separates different fields for one
+  // size, not multiple size-values for the same field like "Waist: 60/65/70"),
+  // this isn't actually the multi-size "Field: v1/v2/v3" format at all.
+  if (Object.keys(extractKnownFieldPairs(valueStr, colMap)).length > 0) return false;
+  return true;
 }
 
 function parseFieldValueLines(rawText, type, takeHalf) {
