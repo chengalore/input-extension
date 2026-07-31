@@ -367,7 +367,9 @@ function tryParseVirtusizeReport(rows, type, takeHalf) {
 
     sizeIdxs.forEach((idx, k) => {
       const val = parseFloat((cells[idx] ?? '').replace(',', '.'));
-      if (!isNaN(val) && !(field in sizes[sizeLabels[k]])) sizes[sizeLabels[k]][field] = val;
+      // Negative values are always a grading delta/increment, never a real
+      // measurement — no field in TYPE_CONFIG can legitimately be negative.
+      if (!isNaN(val) && val >= 0 && !(field in sizes[sizeLabels[k]])) sizes[sizeLabels[k]][field] = val;
     });
   }
 
@@ -472,7 +474,9 @@ function tryParsePomSheet(rows, type, takeHalf) {
     const valueCells = cols.slice(1);
     sizeLabels.forEach((size, si) => {
       const val = parseFloat((valueCells[si] ?? '').replace(',', '.'));
-      if (!isNaN(val) && !(field in sizes[size])) sizes[size][field] = val;
+      // Negative values are always a grading delta/increment, never a real
+      // measurement — no field in TYPE_CONFIG can legitimately be negative.
+      if (!isNaN(val) && val >= 0 && !(field in sizes[size])) sizes[size][field] = val;
     });
   }
 
@@ -567,7 +571,9 @@ function tryParseSpecSheet(lines, type, takeHalf) {
 
     sizeLabels.forEach((size, si) => {
       const val = parseFloat(valueCells[si].replace(',', '.'));
-      if (!isNaN(val) && !(field in sizes[size])) sizes[size][field] = val;
+      // Negative values are always a grading delta/increment, never a real
+      // measurement — no field in TYPE_CONFIG can legitimately be negative.
+      if (!isNaN(val) && val >= 0 && !(field in sizes[size])) sizes[size][field] = val;
     });
   }
 
@@ -640,7 +646,9 @@ function extractKnownFieldPairs(str, colMap) {
   const escaped = keys.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
   // Allow an optional qualifier between the field name and its colon, e.g.
   // "Hip (18cm below top): 84cm" — otherwise the key never reaches the colon.
-  const re = new RegExp(`(${escaped.join('|')})\\s*(?:[(（][^)）]*[)）])?\\s*[:：]\\s*(\\d+\\.?\\d*)`, 'gi');
+  // Also allow an optional "Approx." filler between the colon and the number,
+  // e.g. "Depth: Approx. 13cm" — otherwise the number never reaches the match.
+  const re = new RegExp(`(${escaped.join('|')})\\s*(?:[(（][^)）]*[)）])?\\s*[:：]\\s*(?:approx\\.?\\s*)?(\\d+\\.?\\d*)`, 'gi');
   const result = {};
   let m;
   while ((m = re.exec(str)) !== null) {
@@ -862,7 +870,9 @@ function parseTabular(rawText, type, takeHalf) {
         sizeLabels.forEach((label, si) => {
           if (!label) return;
           const val = parseFloat((values[si] ?? '').replace(',', '.'));
-          if (!isNaN(val) && !(field in sizes[label])) sizes[label][field] = val;
+          // Negative values are always a grading delta/increment, never a real
+          // measurement — no field in TYPE_CONFIG can legitimately be negative.
+          if (!isNaN(val) && val >= 0 && !(field in sizes[label])) sizes[label][field] = val;
         });
       }
       for (const [sizeLabel, measurements] of Object.entries(sizes)) {
@@ -984,7 +994,14 @@ function parseSegment(segment, type) {
   // "Width (bottom): 29cm", "depth 8.0cm x width 35.0cm x height 14.5cm"
   if (type === 'bag') {
     const NAMED_BAG_RE = /(depth|width|height|length)\s*(?:\([^)]*\))?\s*:?\s*([\d.]+)/gi;
-    const namedBagMatches = [...segment.matchAll(NAMED_BAG_RE)];
+    const namedBagMatches = [...segment.matchAll(NAMED_BAG_RE)].filter(m => {
+      // Reject when the keyword is part of a compound phrase like "Handle
+      // height" or "Chain length" — an accessory measurement, not the bag's
+      // own dimension — by requiring a real separator (start of string, comma,
+      // "x"/"×", bullet, etc.) rather than another word right before it.
+      const before = segment.slice(0, m.index).replace(/\s+$/, '');
+      return before === '' || /[,、・xX×/]$/.test(before);
+    });
     if (namedBagMatches.length >= 1) {
       const NAME_MAP = { depth: 'depth', width: 'width', height: 'height', length: 'height' };
       for (const [, name, num] of namedBagMatches) {
@@ -1111,6 +1128,10 @@ function parseSegment(segment, type) {
     const sl = s.toLowerCase();
     const sortedBagKeys = Object.keys(BAG_COLUMN_MAP).sort((a, b) => b.length - a.length);
     for (const key of sortedBagKeys) {
+      // Single-letter abbreviations (h/w/d/l) need a word-boundary check —
+      // otherwise "h" matches as a false-positive prefix of "Handle", not just
+      // genuine standalone uses like "H: 19cm" or "H19cm".
+      if (key.length === 1 && /[a-z]/i.test(sl[key.length] ?? '')) continue;
       if (sl.startsWith(key)) {
         const numMatch = s.slice(key.length).match(/\d+\.?\d*/);
         if (numMatch) {
@@ -1564,7 +1585,9 @@ function parseGraded(rawText, type, takeHalf) {
 
     for (const { i, size } of sizeCols) {
       const val = parseFloat((cols[i + sizeDataOffset] ?? '').replace(',', '.'));
-      if (!isNaN(val) && !(field in sizes[size])) {
+      // Negative values are always a grading delta/increment, never a real
+      // measurement — no field in TYPE_CONFIG can legitimately be negative.
+      if (!isNaN(val) && val >= 0 && !(field in sizes[size])) {
         sizes[size][field] = val;
       }
     }
@@ -1668,7 +1691,9 @@ function parseSpaceSeparatedGraded(rawText, type, takeHalf) {
     const values = dataLines[i].slice(-nSizes);
     values.forEach((val, si) => {
       const label = sizeLabels[si];
-      if (!isNaN(val) && !(field in sizes[label])) sizes[label][field] = val;
+      // Negative values are always a grading delta/increment, never a real
+      // measurement — no field in TYPE_CONFIG can legitimately be negative.
+      if (!isNaN(val) && val >= 0 && !(field in sizes[label])) sizes[label][field] = val;
     });
   }
 
@@ -1777,9 +1802,23 @@ function parseFieldValueLines(rawText, type, takeHalf) {
   return { sizes, errors };
 }
 
-function isBlockFormat(rawText) {
+function isBlockFormat(rawText, type) {
   // Only treat as block if [label] appears on a line by itself (no measurement content after it)
-  return /^\[.+\]\s*$/m.test(rawText);
+  if (!/^\[.+\]\s*$/m.test(rawText)) return false;
+  // A generic heading like "[Size]" (not an actual size value) can coincidentally
+  // match the bracket pattern without the rest of the content actually being
+  // block format — verify at least one "Field: value" line with a recognized
+  // field exists, since that's what parseBlockFormat itself requires to do
+  // anything useful. Otherwise this misroutes tab-separated tables etc. into a
+  // parser that silently returns nothing.
+  const colMap = TOPS_TYPES.has(type) ? TOPS_COLUMN_MAP
+               : PANTS_TYPES.has(type) ? PANTS_COLUMN_MAP
+               : null;
+  if (!colMap) return true;
+  return rawText.split('\n').some(l => {
+    const m = l.trim().match(/^(.+?)\s*[:：]\s*(.+)$/);
+    return m && m[1].toLowerCase().trim() in colMap;
+  });
 }
 
 // Join a bare label line (no colon) that got line-wrapped mid-field-name onto the
@@ -1817,11 +1856,20 @@ function joinContinuationLines(rawText) {
   for (const line of lines) {
     const t = line.trim();
     if (!t) { out.push(''); continue; }
-    if ((t[0] === ':' || t[0] === ',') && out.length > 0) {
-      out[out.length - 1] = out[out.length - 1].trimEnd() + t;
-    } else {
-      out.push(t);
+    // '.' also joins — a mid-word wrap like "Approx\n. 37cm" splits the "."
+    // off "Approx." onto its own line, same shape as the ':'/',' cases below.
+    if (t[0] === ':' || t[0] === ',' || t[0] === '.') {
+      if (out.length > 0) {
+        out[out.length - 1] = out[out.length - 1].trimEnd() + t;
+        continue;
+      }
+      // Leading marker with nothing to attach to (e.g. a truncated paste that
+      // started mid-sentence) — strip it rather than corrupting the label that
+      // follows, e.g. ": Height: 35cm" would otherwise never match "height".
+      out.push(t.slice(1).trim());
+      continue;
     }
+    out.push(t);
   }
   return out;
 }
@@ -1998,7 +2046,7 @@ function parse(rawText, type, takeHalf) {
     if (/(?:^|\t)\d{2,3}(?:\t\d{2,3}){2,}/m.test(top)) return parseTabular(rawText, type, takeHalf);
   }
   if (isLinearizedTableFormat(rawText, type)) rawText = delinearizeTable(rawText, type);
-  if (isBlockFormat(rawText)) return parseBlockFormat(rawText, type, takeHalf);
+  if (isBlockFormat(rawText, type)) return parseBlockFormat(rawText, type, takeHalf);
   if (isSpaceSeparatedGradedFormat(rawText)) return parseSpaceSeparatedGraded(rawText, type, takeHalf);
   if (isGradedFormat(rawText)) return parseGraded(rawText, type, takeHalf);
   if (isFieldValueFormat(rawText, type)) return parseFieldValueLines(rawText, type, takeHalf);
