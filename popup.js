@@ -139,6 +139,7 @@ const TOPS_COLUMN_MAP = {
   '肩幅':  'shoulder',
   'バスト': 'bust',
   '身幅':   'bust',
+  '胸囲':   'bust',
   '袖丈':  'sleeve_length',
   '着丈':  'height',
   '身丈':  'height',
@@ -828,7 +829,7 @@ function parseTabular(rawText, type, takeHalf) {
     if (headers.length === 1 && sizeIdx === 0) {
       const innerHeaderIdx = lines.findIndex((l, i) => i > 0 && l.includes('\t'));
       if (innerHeaderIdx > 0 && innerHeaderIdx + 1 < lines.length) {
-        const preambleLabel = normalizeLabel(lines.slice(1, innerHeaderIdx).join(' ').trim());
+        const preambleLines = lines.slice(1, innerHeaderIdx);
         const innerHeaders = lines[innerHeaderIdx].split('\t').map(h => h.trim().toLowerCase());
         const innerIndexToField = {};
         innerHeaders.forEach((h, i) => {
@@ -837,8 +838,15 @@ function parseTabular(rawText, type, takeHalf) {
           if (f) innerIndexToField[i] = f;
         });
         if (Object.keys(innerIndexToField).length > 0) {
-          for (let i = innerHeaderIdx + 1; i < lines.length; i++) {
-            const cols = lines[i].split('\t').map(c => c.trim());
+          const dataLines = lines.slice(innerHeaderIdx + 1);
+          // Multiple preamble lines that exactly match the data row count are
+          // positionally-paired size labels (e.g. "S\nM\nL\n..." each followed,
+          // after the inner header, by its own data row) — not one combined
+          // label for every row, which is what joining them all would produce.
+          const positional = preambleLines.length > 1 && preambleLines.length === dataLines.length;
+          const combinedLabel = normalizeLabel(preambleLines.join(' ').trim());
+          for (let i = 0; i < dataLines.length; i++) {
+            const cols = dataLines[i].split('\t').map(c => c.trim());
             const measurements = {};
             for (const [idxStr, field] of Object.entries(innerIndexToField)) {
               const nums = extractNumbers(cols[Number(idxStr)] ?? '');
@@ -846,9 +854,10 @@ function parseTabular(rawText, type, takeHalf) {
             }
             normalizeMeasurements(measurements, takeHalf);
             computeSleeve(measurements);
+            const sizeLabel = positional ? normalizeLabel(preambleLines[i]) : combinedLabel;
             const missing = TYPE_CONFIG[type].required.filter(k => !(k in measurements));
-            if (missing.length) errors.push(`"${preambleLabel}" is missing required fields: ${missing.join(', ')}`);
-            if (Object.keys(measurements).length > 0) sizes[preambleLabel] = measurements;
+            if (missing.length) errors.push(`"${sizeLabel}" is missing required fields: ${missing.join(', ')}`);
+            if (Object.keys(measurements).length > 0) sizes[sizeLabel] = measurements;
           }
           return { sizes, errors };
         }
