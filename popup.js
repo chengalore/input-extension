@@ -504,7 +504,8 @@ const SPEC_SHEET_DESC_HEADER_RE = /^(description|pom\s*name|measuring\s*point|po
 // Size codes are sometimes numeric grading (28, 30, 32), sometimes letter sizes
 // (XS, S, M, L, XL, 2XL), and sometimes compound straddle sizes (XS/S, S/M,
 // M/L) — accept all three, not just single pure-integer or single-letter codes.
-const SPEC_SHEET_SIZE_UNIT_RE = 'xxxs|xxs|xs|s|m|l|xl|xxl|2xl|3xl|xxxl|\\d+';
+const SIZE_LETTER_UNIT_RE = 'xxxs|xxs|xs|s|m|l|xl|xxl|2xl|3xl|xxxl';
+const SPEC_SHEET_SIZE_UNIT_RE = `${SIZE_LETTER_UNIT_RE}|\\d+`;
 const SPEC_SHEET_SIZE_CODE_RE = new RegExp(`^(?:${SPEC_SHEET_SIZE_UNIT_RE})(?:/(?:${SPEC_SHEET_SIZE_UNIT_RE}))*$`, 'i');
 
 function tryParseSpecSheet(lines, type, takeHalf) {
@@ -1384,6 +1385,11 @@ function matchGradedField(desc, altDesc = '', type = '') {
   // Length measurement but mentions "waist edge" as its starting reference
   // point, which would otherwise be caught by the generic waist-check below.
   if (!PANTS_TYPES.has(type) && /\bcbl\b/.test(d)) return 'height$cb'; // Center Back Length abbreviation
+  // "Zip length" (or similar accessory hardware) is a construction detail, not
+  // the garment's own body length — e.g. "CF zip length" competing with "CF
+  // length from neck seam to hem edge" for the same CF-length priority tag
+  // would otherwise let the zip's length win just by appearing first.
+  if (!PANTS_TYPES.has(type) && /length/.test(d) && /\bzip(?:per)?\b/.test(d)) return null;
   if (!PANTS_TYPES.has(type) && /length/.test(d)) {
     const hasHps = /from (hps|highest point shoulder)/.test(d);
     const hasCb  = /(cb|centre back|center back|\bback\b)/.test(d);
@@ -2048,11 +2054,18 @@ function delinearizeTable(rawText, type) {
 function parse(rawText, type, takeHalf) {
   // POM spec-sheet and Dim/Ref/Code tech-pack sheets: route to parseTabular before
   // isGradedFormat intercepts (it matches "POM code\t", "Dim\t", "Ref\t", "Code\t").
-  // Distinguish tech-pack from graded by the presence of pure-integer size labels.
+  // Distinguish tech-pack from graded by the presence of size labels — numeric
+  // (28, 30, 32) or letter/compound (XXS, XS/S, S/M) — since parseGraded assumes
+  // description and size codes share one header line, but tech-pack sheets often
+  // put the actual size-code row on the line below (which tryParseSpecSheet,
+  // reached via parseTabular, already handles via its nearby-line lookback).
   if (/^POM\t/m.test(rawText)) return parseTabular(rawText, type, takeHalf);
   if (/^(?:dim|ref|code)\t/im.test(rawText.split('\n').slice(0, 4).join('\n'))) {
     const top = rawText.split('\n').slice(0, 6).join('\n');
-    if (/(?:^|\t)\d{2,3}(?:\t\d{2,3}){2,}/m.test(top)) return parseTabular(rawText, type, takeHalf);
+    const hasNumericSizeRun = /(?:^|\t)\d{2,3}(?:\t\d{2,3}){2,}/m.test(top);
+    const letterToken = `(?:${SIZE_LETTER_UNIT_RE})(?:/(?:${SIZE_LETTER_UNIT_RE}))*`;
+    const hasLetterSizeRun = new RegExp(`(?:^|\\t)${letterToken}(?:\\t${letterToken}){2,}`, 'im').test(top);
+    if (hasNumericSizeRun || hasLetterSizeRun) return parseTabular(rawText, type, takeHalf);
   }
   if (isLinearizedTableFormat(rawText, type)) rawText = delinearizeTable(rawText, type);
   if (isBlockFormat(rawText, type)) return parseBlockFormat(rawText, type, takeHalf);
