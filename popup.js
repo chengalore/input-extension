@@ -934,8 +934,8 @@ const QUALIFIER_LABEL = /^(?:approx\.?|size)$/i;
 function normalizeLabel(raw) {
   // Strip a leading list-bullet marker — markdown "- "/"* " (space required, so
   // a genuine leading hyphen like "-1" isn't mistaken for a bullet) or a CJK
-  // bullet char (■●▪□◆◇・, no space required, matching existing convention).
-  const debulleted = raw.trim().replace(/^(?:[-*]\s+|[■●▪□◆◇・]\s*)/, '');
+  // bullet char (■●▪□◆◇•・, no space required, matching existing convention).
+  const debulleted = raw.trim().replace(/^(?:[-*]\s+|[■●▪□◆◇•・]\s*)/, '');
   // Strip "Size " / "size " prefix — e.g. "Size S" → "S", "Size M" → "M"
   const label = debulleted.replace(/^size\s+/i, '') || debulleted;
   return QUALIFIER_LABEL.test(label) ? 'ONE SIZE' : label;
@@ -1010,7 +1010,11 @@ function parseSegment(segment, type) {
       // own dimension — by requiring a real separator (start of string, comma,
       // "x"/"×", bullet, etc.) rather than another word right before it.
       const before = segment.slice(0, m.index).replace(/\s+$/, '');
-      return before === '' || /[,、・xX×/]$/.test(before);
+      if (before === '' || /[,、・xX×/]$/.test(before)) return true;
+      // "Main unit"/"Main body"/"Body" describe the bag's own core dimensions,
+      // not an accessory — e.g. "Main unit height" still means the bag's own
+      // height, unlike "Handle height" or "Chain length".
+      return /\b(?:main\s+unit|main\s+body|body)$/i.test(before);
     });
     if (namedBagMatches.length >= 1) {
       const NAME_MAP = { depth: 'depth', width: 'width', height: 'height', length: 'height' };
@@ -1134,7 +1138,7 @@ function parseSegment(segment, type) {
   // Named bag measurements via BAG_COLUMN_MAP startsWith — handles Japanese field names
   // like "高さ40", "幅42", "まち2" (strips leading bullet/decoration chars like ■●◆).
   if (type === 'bag') {
-    const s = segment.replace(/^[■●▪□◆◇・\s]+/, '').trim();
+    const s = segment.replace(/^[■●▪□◆◇•・\s]+/, '').trim();
     const sl = s.toLowerCase();
     const sortedBagKeys = Object.keys(BAG_COLUMN_MAP).sort((a, b) => b.length - a.length);
     for (const key of sortedBagKeys) {
@@ -1201,7 +1205,7 @@ function parseSingleLine(rawText, type, takeHalf) {
     let split = splitLine(line);
     if (!split) {
       // No colon — try parsing as bare measurements (e.g. a dimension string)
-      const segments = line.split(/[/・]/).map(s => s.replace(/^[■●▪□◆◇]+/, '').trim()).filter(Boolean);
+      const segments = line.split(/[/・]/).map(s => s.replace(/^[■●▪□◆◇•]+/, '').trim()).filter(Boolean);
       const bare = {};
       let potentialLabel = null;
       for (let si = 0; si < segments.length; si++) {
@@ -1214,9 +1218,19 @@ function parseSingleLine(rawText, type, takeHalf) {
         }
       }
       if (Object.keys(bare).length > 0) {
-        const sizeLabel = pendingLabel ?? potentialLabel ?? 'ONE SIZE';
-        pendingLabel = null;
-        storeMeasurements(sizeLabel, bare);
+        if (!pendingLabel && !potentialLabel && lastSizeLabel) {
+          // No label info on this line at all — it's a continuation field for
+          // the last known size (e.g. each dimension on its own tab-separated
+          // line: "width\t56cm" / "Machi\t15.5cm"), not a signal to start a
+          // new "ONE SIZE" entry.
+          for (const [k, v] of Object.entries(bare)) {
+            if (!(k in sizes[lastSizeLabel])) sizes[lastSizeLabel][k] = v;
+          }
+        } else {
+          const sizeLabel = pendingLabel ?? potentialLabel ?? 'ONE SIZE';
+          pendingLabel = null;
+          storeMeasurements(sizeLabel, bare);
+        }
       } else {
         // No measurements — treat as a size label for the next line
         pendingLabel = potentialLabel ?? line;
@@ -1284,7 +1298,7 @@ function parseSingleLine(rawText, type, takeHalf) {
       continue;
     }
 
-    const segments = measurementStr.split(/[/,、・]/).map(s => s.replace(/^[■●▪□◆◇]+/, '').trim()).filter(Boolean);
+    const segments = measurementStr.split(/[/,、・]/).map(s => s.replace(/^[■●▪□◆◇•]+/, '').trim()).filter(Boolean);
     const measurements = {};
     for (const seg of segments) {
       for (const [k, v] of Object.entries(parseSegment(seg, type))) {
