@@ -703,6 +703,38 @@ function parseTabular(rawText, type, takeHalf) {
     lines = repaired;
   }
 
+  // Strip a leading "cm / inches / (CM)" unit-toggle preamble — a common
+  // artifact of copying a size chart from a page with cm/inch toggle buttons.
+  // These aren't measurement data and would otherwise get misread as the
+  // header row or a bogus size label.
+  const UNIT_TOGGLE_RE = /^\(?(?:cm|inch(?:es)?)\)?$/i;
+  while (lines.length > 0 && UNIT_TOGGLE_RE.test(lines[0].trim())) {
+    lines = lines.slice(1);
+  }
+
+  // Join a bare field-name line (no tab) with an immediately-following
+  // all-numeric, multi-cell line — the field name and its per-size values got
+  // split across two physical lines instead of one tab-joined row, e.g.
+  // "CHEST\n70.1\t73.6\t77.1\t79.6". Left as two lines, the field-name line has
+  // no values to pair with it and the values line has no field name.
+  lines = (() => {
+    const out = [];
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const next = lines[i + 1];
+      if (next && !line.includes('\t') && !/^[\d.]+$/.test(line.trim())) {
+        const nextCols = next.split('\t').map(c => c.trim());
+        if (nextCols.length > 1 && nextCols.every(c => /^[\d.]+$/.test(c))) {
+          out.push(`${line.trim()}\t${next}`);
+          i++;
+          continue;
+        }
+      }
+      out.push(line);
+    }
+    return out;
+  })();
+
   const specResult = tryParseSpecSheet(lines, type, takeHalf);
   if (specResult) return specResult;
 
@@ -874,7 +906,13 @@ function parseTabular(rawText, type, takeHalf) {
       if (field && hasNumericValue) transposedFields.push({ field, values: cols.slice(1) });
     }
     if (transposedFields.length > 0) {
-      const sizeLabels = headers.slice(1).map(h => normalizeLabel(h));
+      // Use the original-case header text for the label itself (matching still
+      // uses the lowercased `headers`/`raw` above) — e.g. "XS" not "xs". `headers`
+      // may have gotten an extra unshift('') for an unlabeled size column, so
+      // mirror that here to keep the two arrays aligned.
+      const originalHeaders = lines[0].split('\t').map(h => h.trim());
+      while (originalHeaders.length < headers.length) originalHeaders.unshift('');
+      const sizeLabels = originalHeaders.slice(1).map(h => normalizeLabel(h));
       for (const label of sizeLabels) if (label) sizes[label] = {};
       for (const { field, values } of transposedFields) {
         sizeLabels.forEach((label, si) => {
@@ -1003,7 +1041,9 @@ function parseSegment(segment, type) {
   // Named bag dimensions — handles optional qualifier in parens:
   // "Width (bottom): 29cm", "depth 8.0cm x width 35.0cm x height 14.5cm"
   if (type === 'bag') {
-    const NAMED_BAG_RE = /(depth|width|height|length)\s*(?:\([^)]*\))?\s*:?\s*([\d.]+)/gi;
+    // Capture an optional trailing unit too, so "Width 300mm" converts to cm
+    // (this tool's implicit unit throughout) instead of being stored as-is.
+    const NAMED_BAG_RE = /(depth|width|height|length)\s*(?:\([^)]*\))?\s*:?\s*([\d.]+)\s*(mm|cm|in|inch)?/gi;
     const namedBagMatches = [...segment.matchAll(NAMED_BAG_RE)].filter(m => {
       // Reject when the keyword is part of a compound phrase like "Handle
       // height" or "Chain length" — an accessory measurement, not the bag's
@@ -1018,9 +1058,14 @@ function parseSegment(segment, type) {
     });
     if (namedBagMatches.length >= 1) {
       const NAME_MAP = { depth: 'depth', width: 'width', height: 'height', length: 'height' };
-      for (const [, name, num] of namedBagMatches) {
+      for (const [, name, num, unit] of namedBagMatches) {
         const field = NAME_MAP[name.toLowerCase()];
-        if (field && !(field in result)) result[field] = parseFloat(num);
+        if (!field || field in result) continue;
+        let value = parseFloat(num);
+        const u = (unit ?? '').toLowerCase();
+        if (u === 'mm') value = Math.round((value / 10) * 100) / 100;
+        else if (u === 'in' || u === 'inch') value = Math.round(value * 2.54 * 100) / 100;
+        result[field] = value;
       }
       return result;
     }
