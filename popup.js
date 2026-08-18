@@ -1487,7 +1487,10 @@ function matchGradedField(desc, altDesc = '', type = '') {
   if (/(across shoulder|shoulder across|shoulder width|shoulder to shoulder)/.test(d)) return 'shoulder';
   // "Chest Width Position from HPS" is a locator for where to measure chest
   // width, not the chest width itself — same "position" exclusion as hip/waist.
-  if (/(chest|bust)/.test(d) && !/pocket|position/.test(d)) return 'bust';
+  // Bare "Right Chest"/"Left Chest" (no width/circ qualifier) is a print/logo
+  // anchor point in tech-pack convention — the body's own chest measurement
+  // is symmetric and wouldn't need a side qualifier without one.
+  if (/(chest|bust)/.test(d) && !/pocket|position/.test(d) && !/^(?:right|left)\s+chest$/.test(d.trim())) return 'bust';
   // Bare "Sleeve Width" (not "Sleeve Width Position") is the same bicep
   // measurement TOPS_COLUMN_MAP already treats it as elsewhere in this file.
   if (/(bicep|(?:upper\s+)?sleeve\s*width)/.test(d) && !/position/.test(d)) return 'bicep';
