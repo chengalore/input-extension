@@ -391,15 +391,19 @@ function tryParseVirtusizeReport(rows, type, takeHalf) {
 // ─── Grading-delta sheet parser ──────────────────────────────────────────────
 // A common export from PLM/grading systems: one row per (field × size), with
 // no header row identifying the columns — tolerance min, tolerance max, a
-// plan/comment column, a blank spacer, the size label, a numeric size index,
-// a grade delta, and the fully-computed actual value for that size, e.g.
+// plan/comment column, a spacer (usually blank, but sometimes a "Base:23"
+// annotation), the size label, a numeric size index, a grade delta, and the
+// fully-computed actual value for that size, e.g.
 // "Front Length\t-1\t1.5\t0\t\t4XL\t10\t2.2\t80.3"
-// Detected purely by shape (9 cells, blank 5th cell, integer 6th cell, numeric
-// last cell). The delta column is a grade increment (often negative below the
-// base size, and shared by unrelated rows in some sheets) — only the actual
-// value (last column) is a real per-size measurement.
+// Detected purely by shape (9 cells, integer 6th cell, numeric last cell) —
+// the spacer column isn't checked, since a field-specific annotation there
+// (e.g. an inseam base-length note) shouldn't disqualify an otherwise
+// well-formed row and silently drop that field. The delta column is a grade
+// increment (often negative below the base size, and shared by unrelated
+// rows in some sheets) — only the actual value (last column) is a real
+// per-size measurement.
 function isGradingDeltaRow(cells) {
-  return cells.length === 9 && cells[4].trim() === ''
+  return cells.length === 9
     && /^\d+$/.test(cells[6].trim())
     && !isNaN(parseFloat(cells[8]));
 }
@@ -1474,10 +1478,11 @@ function matchGradedField(desc, altDesc = '', type = '') {
   // Neck width — stored internally for raglan total sleeve computation
   if (/\bneck\s*(width|opening)\b/.test(d)) return '_neckWidth';
   // Decoration/print placement — e.g. "Right Chest : Spiral Logo / down from CFN
-  // to TIP" or "Left Chest : EMBLEM / from CF" name a body-part landmark (chest,
-  // CFN) purely to locate a graphic, not to measure the garment itself; the
-  // generic chest/bust check below would otherwise misread these as bust values.
-  if (/\b(logo|emblem|print|patch|embroidery)\b/.test(d)) return null;
+  // to TIP" or "Spiral Mark : Left Front Body / above from Hem" name a body-part
+  // landmark (chest, hem) purely to locate a graphic or construction mark, not
+  // to measure the garment itself; the generic chest/hem checks below would
+  // otherwise misread these as real bust/hem/legOpening values.
+  if (/\b(logo|emblem|print|patch|embroidery|mark)\b/.test(d)) return null;
 
   // Tops: sleeve
   if (/sleeve.*from.*\bshoulder\b/.test(d)) return 'sleeve_length';
@@ -1595,8 +1600,12 @@ function matchGradedField(desc, altDesc = '', type = '') {
   // Pants lengths
   if (/\boutseam\b/.test(d)) return null;
   if (/\b(inseam|inleg|inside\s+leg)\b/.test(d)) {
-    // Tag with the inch length when present (e.g. "Inseam 28"" → _inseamLen_28)
-    const lenMatch = d.match(/(\d+)/);
+    // Tag with the inch length when marked with an inch sign (e.g. "Inseam 28""
+    // -> _inseamLen_28) — a single field's own scope/range note, e.g. "Inseam
+    // ( 18.0 < 28.0 )", is not a distinct inseam-length option and must stay
+    // untagged "inseam", or every size gets wrongly split into its own
+    // "<size>/18" combination even though only one inseam field exists.
+    const lenMatch = d.match(/(\d+)\s*["”]/);
     return lenMatch ? `_inseamLen_${lenMatch[1]}` : 'inseam';
   }
 
