@@ -388,6 +388,80 @@ function tryParseVirtusizeReport(rows, type, takeHalf) {
   return { sizes, errors };
 }
 
+// ─── Grading-delta sheet parser ──────────────────────────────────────────────
+// A common export from PLM/grading systems: one row per (field × size), with
+// no header row identifying the columns — tolerance min, tolerance max, a
+// plan/comment column, a blank spacer, the size label, a numeric size index,
+// a grade delta, and the fully-computed actual value for that size, e.g.
+// "Front Length\t-1\t1.5\t0\t\t4XL\t10\t2.2\t80.3"
+// Detected purely by shape (9 cells, blank 5th cell, integer 6th cell, numeric
+// last cell). The delta column is a grade increment (often negative below the
+// base size, and shared by unrelated rows in some sheets) — only the actual
+// value (last column) is a real per-size measurement.
+function isGradingDeltaRow(cells) {
+  return cells.length === 9 && cells[4].trim() === ''
+    && /^\d+$/.test(cells[6].trim())
+    && !isNaN(parseFloat(cells[8]));
+}
+
+function tryParseGradingDeltaSheet(rows, type, takeHalf) {
+  const cellRows = rows.map(r => r.map(c => c.trim())).filter(r => r.some(c => c));
+  const matching = cellRows.filter(isGradingDeltaRow);
+  if (matching.length < 3 || matching.length < cellRows.length * 0.8) return null;
+
+  const colMap = TOPS_TYPES.has(type) ? TOPS_COLUMN_MAP
+               : PANTS_TYPES.has(type) ? PANTS_COLUMN_MAP
+               : BAG_COLUMN_MAP;
+
+  const sizes = {};
+  const errors = [];
+  for (const cells of matching) {
+    const desc = cells[0];
+    const sizeLabel = cells[5];
+    const val = parseFloat(cells[8]);
+    if (isNaN(val) || val < 0 || !sizeLabel) continue;
+    // matchGradedField runs first, not colMap: a direct untagged colMap hit
+    // (e.g. "Front Length" -> plain "height") would bypass the priority-tag
+    // system entirely, so a later tagged competitor (e.g. "Center Back
+    // Length" -> "height$cb") could overwrite it in the resolution pass below
+    // even though the untagged value should have outranked it.
+    const field = matchGradedField(desc, '', type) ?? colMap[desc.toLowerCase()];
+    if (!field) continue;
+    if (!sizes[sizeLabel]) sizes[sizeLabel] = {};
+    if (!(field in sizes[sizeLabel])) sizes[sizeLabel][field] = val;
+  }
+
+  for (const [sizeLabel, measurements] of Object.entries(sizes)) {
+    if (Object.keys(measurements).length === 0) { delete sizes[sizeLabel]; continue; }
+
+    for (const key of WAIST_PRIORITY) { if (key in measurements) { measurements.waist = measurements[key]; break; } }
+    for (const key of WAIST_PRIORITY) delete measurements[key];
+
+    for (const key of HIP_PRIORITY) { if (key in measurements) { measurements.hip = measurements[key]; break; } }
+    for (const key of HIP_PRIORITY) delete measurements[key];
+
+    normalizeMeasurements(measurements, takeHalf);
+
+    const wb = measurements._waistband ?? 0;
+    delete measurements._waistband;
+    if ('frontRise$incl' in measurements) measurements.frontRise = measurements['frontRise$incl'];
+    else if ('frontRise$excl' in measurements) measurements.frontRise = measurements['frontRise$excl'] + wb;
+    if ('backRise$incl' in measurements) measurements.backRise = measurements['backRise$incl'];
+    else if ('backRise$excl' in measurements) measurements.backRise = measurements['backRise$excl'] + wb;
+    for (const key of RISE_TAGS) delete measurements[key];
+
+    for (const key of HEIGHT_PRIORITY) { if (key in measurements) { measurements.height = measurements[key]; break; } }
+    for (const key of HEIGHT_PRIORITY) delete measurements[key];
+
+    computeSleeve(measurements);
+    const missing = TYPE_CONFIG[type].required.filter(k => !(k in measurements));
+    if (missing.length) errors.push(`"${sizeLabel}" is missing required fields: ${missing.join(', ')}`);
+  }
+
+  if (Object.keys(sizes).length === 0) return null;
+  return { sizes: expandInseamCombinations(sizes), errors };
+}
+
 // ─── POM spec-sheet parser ───────────────────────────────────────────────────
 // "POM" (Point of Measure) sheets: col 0 = measurement description,
 // cols 1-N = one value per size. The header row has "POM" as col 0,
@@ -671,6 +745,10 @@ function parseTabular(rawText, type, takeHalf) {
   // Virtusize QA-report: header row starts with "Virtusize Measurement"
   const vsReportResult = tryParseVirtusizeReport(tsvRows, type, takeHalf);
   if (vsReportResult) return vsReportResult;
+
+  // Grading-delta sheet: no header row, detected by the 9-column row shape
+  const gradingDeltaResult = tryParseGradingDeltaSheet(tsvRows, type, takeHalf);
+  if (gradingDeltaResult) return gradingDeltaResult;
 
   // Reconvert TSV rows to tab-joined lines for the rest of the logic.
   // Don't trim — preserves leading tabs that mark an empty size-column header.
@@ -1395,6 +1473,11 @@ function matchGradedField(desc, altDesc = '', type = '') {
   if (/raglan.*sleeve|sleeve.*raglan/.test(d)) return '_raglanSleeve';
   // Neck width — stored internally for raglan total sleeve computation
   if (/\bneck\s*(width|opening)\b/.test(d)) return '_neckWidth';
+  // Decoration/print placement — e.g. "Right Chest : Spiral Logo / down from CFN
+  // to TIP" or "Left Chest : EMBLEM / from CF" name a body-part landmark (chest,
+  // CFN) purely to locate a graphic, not to measure the garment itself; the
+  // generic chest/bust check below would otherwise misread these as bust values.
+  if (/\b(logo|emblem|print|patch|embroidery)\b/.test(d)) return null;
 
   // Tops: sleeve
   if (/sleeve.*from.*\bshoulder\b/.test(d)) return 'sleeve_length';
@@ -1402,8 +1485,12 @@ function matchGradedField(desc, altDesc = '', type = '') {
   // Plain "sleeve length" with no from-qualifier — respect the Sleeve=arm toggle
   if (/\bsleeve\b.*\blength\b/.test(d) && !/from/.test(d)) return TOPS_COLUMN_MAP['sleeve length'] ?? 'sleeve_length';
   if (/(across shoulder|shoulder across|shoulder width|shoulder to shoulder)/.test(d)) return 'shoulder';
-  if (/(chest|bust)/.test(d) && !/pocket/.test(d)) return 'bust';
-  if (/(bicep|upper sleeve width)/.test(d)) return 'bicep';
+  // "Chest Width Position from HPS" is a locator for where to measure chest
+  // width, not the chest width itself — same "position" exclusion as hip/waist.
+  if (/(chest|bust)/.test(d) && !/pocket|position/.test(d)) return 'bust';
+  // Bare "Sleeve Width" (not "Sleeve Width Position") is the same bicep
+  // measurement TOPS_COLUMN_MAP already treats it as elsewhere in this file.
+  if (/(bicep|(?:upper\s+)?sleeve\s*width)/.test(d) && !/position/.test(d)) return 'bicep';
   if (/(arm\s*(hole|opening)|armhole)/.test(d)) return 'armOpening';
   // Only the primary-subject portion before an "@ reference point" — and outside
   // any "(...)" aside — counts. E.g. "Waist Circ. @ hem rib transfer" is a waist
@@ -1415,7 +1502,9 @@ function matchGradedField(desc, altDesc = '', type = '') {
   const dBeforeAt = d.split('@')[0].replace(/\([^)]*\)/g, '');
   // "Depth" alone (no "Finished") also means the small fold/seam allowance, not
   // the primary circumference — e.g. "Hem Depth" next to "1/2 Hem - straight".
-  if ((/\bhem\b/.test(dBeforeAt) || (/\bbottom\b/.test(dBeforeAt) && !/width/.test(dBeforeAt))) && !/finished|position|length|depth/.test(d)) {
+  // "Open Sleeve Bottom" is the cuff opening, not the garment's own hem — same
+  // "sleeve" exclusion the "bottom width" check below already applies.
+  if ((/\bhem\b/.test(dBeforeAt) || (/\bbottom\b/.test(dBeforeAt) && !/width/.test(dBeforeAt))) && !/finished|position|length|depth|sleeve/.test(d)) {
     // Pants/shorts call this "leg opening", not "hem" — matches the same
     // type-based distinction the "bottom width" check below already makes.
     return PANTS_TYPES.has(type) ? 'legOpening' : 'hem';
