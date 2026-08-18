@@ -102,6 +102,7 @@ const TOPS_COLUMN_MAP = {
   'back length':      'height',
   'body length':      'height',
   'clothes length':   'height',
+  'garment length':   'height',
   'shoulder width':   'shoulder',
   'shoulder':         'shoulder',
   'body width':       'bust',
