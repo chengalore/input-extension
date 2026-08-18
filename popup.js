@@ -2155,6 +2155,18 @@ function isLinearizedTableFormat(rawText, type) {
                : PANTS_TYPES.has(type) ? PANTS_COLUMN_MAP
                : null;
   if (colMap && cells.some(c => Object.keys(extractKnownFieldPairs(c, colMap)).length >= 2)) return false;
+  // extractKnownFieldPairs above only catches colon-joined records ("Field: 38cm").
+  // A record like "Chest width 26cm / Shoulder width 23.5cm / ..." names each field
+  // directly followed by its value with no colon at all — still a single
+  // self-contained multi-field line, not an atomic cell to reshape into columns.
+  if (colMap) {
+    const keys = Object.keys(colMap).filter(k => typeof colMap[k] === 'string' && !colMap[k].startsWith('_')).sort((a, b) => b.length - a.length);
+    if (keys.length > 0) {
+      const escaped = keys.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+      const looseFieldRe = new RegExp(`(?:${escaped.join('|')})\\s*(?:[:：]\\s*)?(?:approx\\.?\\s*)?\\d+\\.?\\d*`, 'gi');
+      if (cells.some(c => (c.match(looseFieldRe) || []).length >= 2)) return false;
+    }
+  }
   return _linearColCount(cells, colMap) > 0;
 }
 
