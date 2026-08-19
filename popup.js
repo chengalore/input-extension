@@ -1104,6 +1104,30 @@ function parseSegment(segment, type) {
     return result;
   }
 
+  // "Vertical 8.5cm (width) x 11cm (depth) x 2cm (gusset)" — a leading
+  // orientation word followed by three values each with a trailing
+  // parenthetical annotation. The annotations are the source's own
+  // (frequently inconsistent) labels, not reliable field names — e.g. here
+  // "depth" is really the flat wallet's width and "gusset" is the actual
+  // depth/thickness — so read the three numbers positionally in
+  // height/width/depth order instead of trusting the parens.
+  const orientedTripleMatch = segment.match(/^(?:vertical|horizontal)\s+([\d.]+)\s*(mm|cm|in|inch)?\s*\([^)]*\)\s*[xX×]\s*([\d.]+)\s*(mm|cm|in|inch)?\s*\([^)]*\)\s*[xX×]\s*([\d.]+)\s*(mm|cm|in|inch)?\s*\([^)]*\)/i);
+  if (orientedTripleMatch) {
+    if (type === 'bag') {
+      const toCm = (num, unit) => {
+        let value = parseFloat(num);
+        const u = (unit ?? '').toLowerCase();
+        if (u === 'mm') value = Math.round((value / 10) * 100) / 100;
+        else if (u === 'in' || u === 'inch') value = Math.round(value * 2.54 * 100) / 100;
+        return value;
+      };
+      result.height = toCm(orientedTripleMatch[1], orientedTripleMatch[2]);
+      result.width = toCm(orientedTripleMatch[3], orientedTripleMatch[4]);
+      result.depth = toCm(orientedTripleMatch[5], orientedTripleMatch[6]);
+    }
+    return result;
+  }
+
   // "Dimensions: H x W [cm]" — first = height, second = width
   const dimMatch = segment.match(/^dimensions?\s*:\s*([\d.]+)\s*[xX×]\s*([\d.]+)/i);
   if (dimMatch) {
