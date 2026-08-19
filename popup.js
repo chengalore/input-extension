@@ -94,6 +94,10 @@ const BAG_COLUMN_MAP = {
   '縦':    'height',  // vertical — alternate word for height in product listings
   '奥行':  'depth',
   '奥行き': 'depth',
+  // "長さ×高さ×奥行き" (length × height × depth) is a common Japanese
+  // listing trio alongside 高さ/奥行き — 長さ fills this tool's "width" slot,
+  // the same role "L" already plays in LETTER_MAP below.
+  '長さ':  'width',
   'まち':  'depth',  // hiragana for machi (gusset)
   'マチ':  'depth',  // katakana for machi (gusset)
 };
