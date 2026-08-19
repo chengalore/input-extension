@@ -1168,7 +1168,14 @@ function parseSegment(segment, type) {
       // "Main unit"/"Main body"/"Body" describe the bag's own core dimensions,
       // not an accessory — e.g. "Main unit height" still means the bag's own
       // height, unlike "Handle height" or "Chain length".
-      return /\b(?:main\s+unit|main\s+body|body)$/i.test(before);
+      if (/\b(?:main\s+unit|main\s+body|body)$/i.test(before)) return true;
+      // A new field also naturally starts right after the PREVIOUS field's
+      // completed value — e.g. "Height 13 Width (top) 16 Width (bottom) 20
+      // Depth 7", a plain space-separated list with no comma at all. Unlike
+      // "Handle height" (keyword preceded by another WORD), a keyword
+      // preceded by a finished number (optionally with a unit and/or a
+      // closing qualifier paren) isn't part of a compound accessory phrase.
+      return /\d\s*(?:mm|cm|in|inch)?\s*\)?$/i.test(before);
     });
     if (namedBagMatches.length >= 1) {
       const NAME_MAP = { depth: 'depth', width: 'width', height: 'height', length: 'height' };
