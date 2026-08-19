@@ -7,6 +7,10 @@ const TYPE_CONFIG = {
     required: ['height', 'width'],
     optional: ['depth'],
   },
+  wallet: {
+    required: ['height', 'width'],
+    optional: ['depth'],
+  },
   shirt: {
     required: ['height', 'bust'],
     optional: ['shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem', 'bicep'],
@@ -63,6 +67,7 @@ const TYPE_CONFIG = {
 
 const TOPS_TYPES  = new Set(['shirt', 'tShirt', 'jacket', 'coat', 'dress', 'dressALine', 'dressSleeve', 'tunicSleeve', 'sweater', 'top', 'skirt']);
 const PANTS_TYPES = new Set(['pants', 'shorts']);
+const BAG_TYPES   = new Set(['bag', 'wallet']);
 
 // Column header (lowercase) → output field name, for bags
 const BAG_COLUMN_MAP = {
@@ -244,6 +249,7 @@ const FIELD_DISPLAY_NAMES = {
 
 const TABLE_FIELD_ORDER = {
   bag:         ['height', 'width', 'depth'],
+  wallet:      ['height', 'width', 'depth'],
   shirt:       ['height', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem', 'bicep'],
   tShirt:      ['height', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem', 'bicep'],
   jacket:      ['height', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem', 'bicep'],
@@ -1083,7 +1089,7 @@ function parseSegment(segment, type) {
   // Unanchored so it works with leading prefixes like "Approx.: "
   const parenMatch = segment.match(/\(\s*([\d.]+)\s*[xX×]\s*[\d.]+\s*\)\s*[xX×]\s*([\d.]+)\s*[xX×]\s*([\d.]+)/i);
   if (parenMatch) {
-    if (type === 'bag') {
+    if (BAG_TYPES.has(type)) {
       result.width = parseFloat(parenMatch[1]);
       result.height = parseFloat(parenMatch[2]);
       result.depth = parseFloat(parenMatch[3]);
@@ -1096,7 +1102,7 @@ function parseSegment(segment, type) {
   // for consistency, since there's no other signal to go on.
   const bareTripleMatch = segment.match(/^([\d.]+)\s*[xX×]\s*([\d.]+)\s*[xX×]\s*([\d.]+)\s*(?:cm|mm|in|inch)?\s*$/i);
   if (bareTripleMatch) {
-    if (type === 'bag') {
+    if (BAG_TYPES.has(type)) {
       result.width = parseFloat(bareTripleMatch[1]);
       result.height = parseFloat(bareTripleMatch[2]);
       result.depth = parseFloat(bareTripleMatch[3]);
@@ -1113,7 +1119,7 @@ function parseSegment(segment, type) {
   // height/width/depth order instead of trusting the parens.
   const orientedTripleMatch = segment.match(/^(?:vertical|horizontal)\s+([\d.]+)\s*(mm|cm|in|inch)?\s*\([^)]*\)\s*[xX×]\s*([\d.]+)\s*(mm|cm|in|inch)?\s*\([^)]*\)\s*[xX×]\s*([\d.]+)\s*(mm|cm|in|inch)?\s*\([^)]*\)/i);
   if (orientedTripleMatch) {
-    if (type === 'bag') {
+    if (BAG_TYPES.has(type)) {
       const toCm = (num, unit) => {
         let value = parseFloat(num);
         const u = (unit ?? '').toLowerCase();
@@ -1131,7 +1137,7 @@ function parseSegment(segment, type) {
   // "Dimensions: H x W [cm]" — first = height, second = width
   const dimMatch = segment.match(/^dimensions?\s*:\s*([\d.]+)\s*[xX×]\s*([\d.]+)/i);
   if (dimMatch) {
-    if (type === 'bag') {
+    if (BAG_TYPES.has(type)) {
       result.height = parseFloat(dimMatch[1]);
       result.width = parseFloat(dimMatch[2]);
     }
@@ -1147,7 +1153,7 @@ function parseSegment(segment, type) {
 
   // Named bag dimensions — handles optional qualifier in parens:
   // "Width (bottom): 29cm", "depth 8.0cm x width 35.0cm x height 14.5cm"
-  if (type === 'bag') {
+  if (BAG_TYPES.has(type)) {
     // Capture an optional trailing unit too, so "Width 300mm" converts to cm
     // (this tool's implicit unit throughout) instead of being stored as-is.
     const NAMED_BAG_RE = /(depth|width|height|length)\s*(?:\([^)]*\))?\s*:?\s*([\d.]+)\s*(mm|cm|in|inch)?/gi;
@@ -1197,7 +1203,7 @@ function parseSegment(segment, type) {
   // "{letter}{num}cm" per-dimension — e.g. "W42.0cm x H35.0cm x D15.0cm"
   // "{num} cm {letter}" format — e.g. "20.5 cm H x 26 cm L x 4 cm D"
   // H=height, W=width, L=length(→width), D=depth
-  if (type === 'bag') {
+  if (BAG_TYPES.has(type)) {
     const LETTER_MAP = { h: 'height', w: 'width', l: 'width', d: 'depth' };
     // Trailing-cm: cm appears only at the end (not after each number before a separator)
     if (/cm\s*$/i.test(segment) && !/\d\.?\d*\s*cm\s*[×xX]/i.test(segment)) {
@@ -1289,7 +1295,7 @@ function parseSegment(segment, type) {
 
   // Named bag measurements via BAG_COLUMN_MAP startsWith — handles Japanese field names
   // like "高さ40", "幅42", "まち2" (strips leading bullet/decoration chars like ■●◆).
-  if (type === 'bag') {
+  if (BAG_TYPES.has(type)) {
     const s = segment.replace(/^[■●▪□◆◇•・\s]+/, '').trim();
     const sl = s.toLowerCase();
     const sortedBagKeys = Object.keys(BAG_COLUMN_MAP).sort((a, b) => b.length - a.length);
@@ -1314,7 +1320,7 @@ function parseSegment(segment, type) {
 function parseSingleLine(rawText, type, takeHalf) {
   // Column map used to detect when a line's label is itself a field name
   // (e.g. "F\nHeight: 30cm, Width: 42.5cm" — "Height" is a bag field, "F" is the size label).
-  const colMap = type === 'bag' ? BAG_COLUMN_MAP
+  const colMap = BAG_TYPES.has(type) ? BAG_COLUMN_MAP
                : TOPS_TYPES.has(type) ? TOPS_COLUMN_MAP
                : PANTS_TYPES.has(type) ? PANTS_COLUMN_MAP
                : null;
@@ -1945,7 +1951,7 @@ function isFieldValueFormat(rawText, type) {
   const split = splitLine(firstLine);
   if (!split) return false;
   const [label, valueStr] = split;
-  const colMap = type === 'bag' ? BAG_COLUMN_MAP
+  const colMap = BAG_TYPES.has(type) ? BAG_COLUMN_MAP
                : TOPS_TYPES.has(type) ? TOPS_COLUMN_MAP
                : PANTS_TYPES.has(type) ? PANTS_COLUMN_MAP
                : null;
@@ -1959,7 +1965,7 @@ function isFieldValueFormat(rawText, type) {
 }
 
 function parseFieldValueLines(rawText, type, takeHalf) {
-  const colMap = type === 'bag' ? BAG_COLUMN_MAP
+  const colMap = BAG_TYPES.has(type) ? BAG_COLUMN_MAP
                : TOPS_TYPES.has(type) ? TOPS_COLUMN_MAP
                : PANTS_TYPES.has(type) ? PANTS_COLUMN_MAP
                : null;
@@ -2174,7 +2180,7 @@ function isLinearizedTableFormat(rawText, type) {
   // parseTabular. A plain colon count is too broad: a legitimate single value
   // like "短：31.0　長：59.0cm" (short/long handle length) also has 2 colons
   // without being a multi-field record, so check against known field names instead.
-  const colMap = type === 'bag' ? BAG_COLUMN_MAP
+  const colMap = BAG_TYPES.has(type) ? BAG_COLUMN_MAP
                : TOPS_TYPES.has(type) ? TOPS_COLUMN_MAP
                : PANTS_TYPES.has(type) ? PANTS_COLUMN_MAP
                : null;
@@ -2235,7 +2241,7 @@ function _linearColCount(cells, colMap) {
 function delinearizeTable(rawText, type) {
   const sep = rawText.includes('\n\n') ? /\n\n+/ : /\n/;
   const cells = rawText.split(sep).map(c => c.trim()).filter(Boolean);
-  const colMap = type === 'bag' ? BAG_COLUMN_MAP
+  const colMap = BAG_TYPES.has(type) ? BAG_COLUMN_MAP
                : TOPS_TYPES.has(type) ? TOPS_COLUMN_MAP
                : PANTS_TYPES.has(type) ? PANTS_COLUMN_MAP
                : null;
@@ -2271,7 +2277,7 @@ function parse(rawText, type, takeHalf) {
   if (isFieldValueFormat(rawText, type)) return parseFieldValueLines(rawText, type, takeHalf);
   if (isSingleLineFormat(rawText)) return parseSingleLine(rawText, type, takeHalf);
   const firstLine = rawText.trim().split('\n')[0];
-  const bagTabular = type === 'bag' && firstLine.includes('\t') && !firstLine.includes(':');
+  const bagTabular = BAG_TYPES.has(type) && firstLine.includes('\t') && !firstLine.includes(':');
   const hasTabular = (TOPS_TYPES.has(type) || PANTS_TYPES.has(type)) && (rawText.includes('\t') || isTabularFormat(rawText));
   if (hasTabular || isTabularFormat(rawText) || bagTabular) return parseTabular(rawText, type, takeHalf);
   return parseSingleLine(rawText, type, takeHalf);
