@@ -1238,6 +1238,21 @@ function parseSegment(segment, type) {
       }
       return result;
     }
+    // "H14.0cm×W(上部)25.0(下部)17.0cm×D10.0cm" — letter label followed by a
+    // parenthetical qualifier before its number, e.g. "W(上部)25.0" (width,
+    // top edge). A second qualified number can immediately follow with no
+    // letter of its own — e.g. "(下部)17.0" (bottom edge) — sharing the
+    // single trailing "cm" that only appears after the LAST number in the
+    // cluster; that second value is intentionally not captured (first
+    // occurrence wins, same convention as "Width (top) 16 Width (bottom) 20").
+    const letterParenDims = [...segment.matchAll(/\b([WHDLwhdl])\s*(?:[(（][^)）]*[)）])?\s*(\d+\.?\d*)(?:\s*[(（][^)）]*[)）]\s*\d+\.?\d*)?\s*cm\b/gi)];
+    if (letterParenDims.length > 1) {
+      for (const [, letter, num] of letterParenDims) {
+        const field = LETTER_MAP[letter.toLowerCase()];
+        if (field && !(field in result)) result[field] = parseFloat(num);
+      }
+      return result;
+    }
     // Trailing-cm: cm appears only at the end (not after each number before a separator)
     if (/cm\s*$/i.test(segment) && !/\d\.?\d*\s*cm\s*[×xX]/i.test(segment)) {
       const trailingDims = [...segment.matchAll(/([WHDLwhdl])(\d+\.?\d*)/gi)];
