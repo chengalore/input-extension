@@ -1185,18 +1185,25 @@ function parseSegment(segment, type) {
     }
   }
 
-  // Named single dimensions — colon is optional ("Width 22cm" or "Width: 22cm")
+  // Named single dimensions — colon is optional ("Width 22cm" or "Width: 22cm").
+  // Bag-only: "width" isn't a real bag field name here, it's bust for tops
+  // (TOPS_COLUMN_MAP already maps "width" -> "bust") — without this guard,
+  // "Width 78cm" on a t-shirt got stored as a literal untracked "width" key
+  // here, before ever reaching the TOPS_TYPES block below that would have
+  // mapped it correctly.
   // Anchored to segment start to avoid partial matches ("Shoulder strap length", etc.)
-  const named = [
-    { re: /^height\s*:?\s*([\d.]+)/i, out: 'height' },
-    { re: /^width\s*:?\s*([\d.]+)/i, out: 'width' },
-    { re: /^depth\s*:?\s*([\d.]+)/i, out: 'depth' },
-  ];
-  for (const { re, out } of named) {
-    const m = segment.match(re);
-    if (m) {
-      result[out] = parseFloat(m[1]);
-      return result;
+  if (BAG_TYPES.has(type)) {
+    const named = [
+      { re: /^height\s*:?\s*([\d.]+)/i, out: 'height' },
+      { re: /^width\s*:?\s*([\d.]+)/i, out: 'width' },
+      { re: /^depth\s*:?\s*([\d.]+)/i, out: 'depth' },
+    ];
+    for (const { re, out } of named) {
+      const m = segment.match(re);
+      if (m) {
+        result[out] = parseFloat(m[1]);
+        return result;
+      }
     }
   }
 
