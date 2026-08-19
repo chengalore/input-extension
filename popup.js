@@ -1329,16 +1329,18 @@ function parseSegment(segment, type) {
     const sl = s.toLowerCase();
     // Multiple CJK dimension keywords packed into one string with no
     // separators between them at all — e.g. "縦 7.5横11マチ2" (height 7.5,
-    // width 11, depth/gusset 2). The startsWith loop below only checks the
-    // start of the string and returns after its first match, so a packed
-    // string like this only ever yielded the first dimension. Scan globally
-    // instead — restricted to CJK keys, since ASCII single-letter keys
-    // (h/w/d/l) already have their own word-boundary-aware matchAll patterns
-    // elsewhere and would be too eager to false-positive without one here.
+    // width 11, depth/gusset 2), or with a parenthetical qualifier between
+    // the keyword and its number — e.g. "縦(全長)23横(底辺)31.5マチ7.5". The
+    // startsWith loop below only checks the start of the string and returns
+    // after its first match, so a packed string like this only ever yielded
+    // the first dimension. Scan globally instead — restricted to CJK keys,
+    // since ASCII single-letter keys (h/w/d/l) already have their own
+    // word-boundary-aware matchAll patterns elsewhere and would be too eager
+    // to false-positive without one here.
     const cjkBagKeys = Object.keys(BAG_COLUMN_MAP).filter(k => /[^\x00-\x7F]/.test(k)).sort((a, b) => b.length - a.length);
     if (cjkBagKeys.length > 0) {
       const escaped = cjkBagKeys.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-      const packedMatches = [...s.matchAll(new RegExp(`(${escaped.join('|')})\\s*(\\d+\\.?\\d*)`, 'g'))];
+      const packedMatches = [...s.matchAll(new RegExp(`(${escaped.join('|')})\\s*(?:[(（][^)）]*[)）])?\\s*(\\d+\\.?\\d*)`, 'g'))];
       if (packedMatches.length > 1) {
         for (const [, key, num] of packedMatches) {
           const field = BAG_COLUMN_MAP[key];
