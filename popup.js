@@ -205,6 +205,7 @@ const PANTS_COLUMN_MAP = {
   'thigh circumference': 'thigh',
   'thigh width':       'thigh',
   'crossing':          'thigh',
+  'crossing width':    'thigh',
   'inseam':            'inseam',
   'crotch length':     'inseam',
   'knee':              'knee',
@@ -2290,7 +2291,11 @@ function _linearColCount(cells, colMap) {
   // (e.g. "twenty five", "26", "27", "28") — treat both as "numeric" so the
   // row-start consistency check below doesn't reject a genuinely valid colCount.
   const isDecimal = s => /^\d+\.?\d*$/.test(s) || parseTextNumber(s) !== null;
-  for (let colCount = 2; colCount <= 10 && colCount < cells.length; colCount++) {
+  // Cap raised from 10 to 30 — a combined jacket+pants suit-set sheet, for
+  // instance, can carry a dozen-plus measurement columns in one linearized
+  // table (size + 12 fields), and the loop's cost is bounded by cells.length
+  // regardless of how high this cap goes.
+  for (let colCount = 2; colCount <= 30 && colCount < cells.length; colCount++) {
     const rowStarts = [];
     let valid = true;
     for (let i = colCount; i < cells.length; i += colCount) {
