@@ -1076,8 +1076,13 @@ function normalizeLabel(raw) {
 }
 
 function splitLine(line) {
-  // "[label] measurement" — e.g. "[Size] H13cm x W15cm x D2cm"
-  const bracketM = line.match(/^\[([^\]]+)\]\s+(.+)$/);
+  // "[label] measurement" — e.g. "[Size] H13cm x W15cm x D2cm". An optional
+  // "【qualifier】" annotation (e.g. "【インナー】" — inner-layer, as opposed to
+  // an outer garment in the same listing) can sit directly against the
+  // bracket with no space at all — e.g. "[00]【インナー】総丈:104cm,バスト:83cm"
+  // — and is discarded here rather than folded into the label, since this
+  // tool has no separate inner/outer concept to attach it to.
+  const bracketM = line.match(/^\[([^\]]+)\]\s*(?:[【][^】]*[】]\s*)?(.+)$/);
   if (bracketM) return [normalizeLabel(bracketM[1]), bracketM[2].trim()];
   // Match label then optional-whitespace : whitespace then rest
   // Handles ASCII ":" and fullwidth "："; space after colon is optional for Japanese text
