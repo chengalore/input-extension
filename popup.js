@@ -134,6 +134,7 @@ const TOPS_COLUMN_MAP = {
   'waist':            'waist',
   'waist width':      'waist',
   'waistline':        'waist',
+  'waist circumference': 'waist',
   'hip':              'hip',
   'hips':             'hip',
   'hem':              'hem',
@@ -2329,7 +2330,25 @@ function delinearizeTable(rawText, type) {
   return rows.join('\n');
 }
 
+// Column maps are shared across several types (e.g. TOPS_COLUMN_MAP's "hip"
+// and "hem" entries exist for dress/skirt but aren't part of jacket/shirt's
+// own schema), and a combined multi-garment sheet (e.g. a jacket+pants
+// suit-set sharing one table) can carry columns that map to a real field
+// name which simply isn't meaningful for the requested type. Strip anything
+// outside TYPE_CONFIG[type]'s own required+optional list so output never
+// reports a field the current type doesn't define.
 function parse(rawText, type, takeHalf) {
+  const result = parseInternal(rawText, type, takeHalf);
+  const allowed = new Set([...(TYPE_CONFIG[type]?.required ?? []), ...(TYPE_CONFIG[type]?.optional ?? [])]);
+  for (const measurements of Object.values(result.sizes)) {
+    for (const key of Object.keys(measurements)) {
+      if (!allowed.has(key)) delete measurements[key];
+    }
+  }
+  return result;
+}
+
+function parseInternal(rawText, type, takeHalf) {
   // POM spec-sheet and Dim/Ref/Code tech-pack sheets: route to parseTabular before
   // isGradedFormat intercepts (it matches "POM code\t", "Dim\t", "Ref\t", "Code\t").
   // Distinguish tech-pack from graded by the presence of size labels — numeric
