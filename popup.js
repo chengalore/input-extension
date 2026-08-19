@@ -733,9 +733,10 @@ function extractKnownFieldPairs(str, colMap) {
   const escaped = keys.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
   // Allow an optional qualifier between the field name and its colon, e.g.
   // "Hip (18cm below top): 84cm" — otherwise the key never reaches the colon.
-  // Also allow an optional "Approx." filler between the colon and the number,
-  // e.g. "Depth: Approx. 13cm" — otherwise the number never reaches the match.
-  const re = new RegExp(`(${escaped.join('|')})\\s*(?:[(（][^)）]*[)）])?\\s*[:：]\\s*(?:approx\\.?\\s*)?(\\d+\\.?\\d*)`, 'gi');
+  // Also allow an optional "Approx."/"約" filler between the colon and the
+  // number, e.g. "Depth: Approx. 13cm" or "D:約8cm" — otherwise the number
+  // never reaches the match.
+  const re = new RegExp(`(${escaped.join('|')})\\s*(?:[(（][^)）]*[)）])?\\s*[:：]\\s*(?:approx\\.?\\s*|約\\s*)?(\\d+\\.?\\d*)`, 'gi');
   const result = {};
   let m;
   while ((m = re.exec(str)) !== null) {
@@ -1205,6 +1206,20 @@ function parseSegment(segment, type) {
   // H=height, W=width, L=length(→width), D=depth
   if (BAG_TYPES.has(type)) {
     const LETTER_MAP = { h: 'height', w: 'width', l: 'width', d: 'depth' };
+    // "H:約19cm × W:約25cm × D:約8cm" — letter label with a colon and an
+    // optional "約" (Japanese "approx.") before the number. The colon (and
+    // "約") sit between the letter and its digits, so neither the no-colon
+    // trailingDims/letterPrefixDims patterns below nor the full-word "named"
+    // checks above (which require "height"/"width"/"depth", not H/W/D) match
+    // this. Colon is required here, distinguishing it from those patterns.
+    const letterColonDims = [...segment.matchAll(/\b([WHDLwhdl])\s*[:：]\s*(?:約\s*)?(\d+\.?\d*)\s*cm\b/gi)];
+    if (letterColonDims.length > 1) {
+      for (const [, letter, num] of letterColonDims) {
+        const field = LETTER_MAP[letter.toLowerCase()];
+        if (field && !(field in result)) result[field] = parseFloat(num);
+      }
+      return result;
+    }
     // Trailing-cm: cm appears only at the end (not after each number before a separator)
     if (/cm\s*$/i.test(segment) && !/\d\.?\d*\s*cm\s*[×xX]/i.test(segment)) {
       const trailingDims = [...segment.matchAll(/([WHDLwhdl])(\d+\.?\d*)/gi)];
@@ -2193,7 +2208,7 @@ function isLinearizedTableFormat(rawText, type) {
     const keys = Object.keys(colMap).filter(k => typeof colMap[k] === 'string' && !colMap[k].startsWith('_')).sort((a, b) => b.length - a.length);
     if (keys.length > 0) {
       const escaped = keys.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-      const looseFieldRe = new RegExp(`(?:${escaped.join('|')})\\s*(?:[:：]\\s*)?(?:approx\\.?\\s*)?\\d+\\.?\\d*`, 'gi');
+      const looseFieldRe = new RegExp(`(?:${escaped.join('|')})\\s*(?:[:：]\\s*)?(?:approx\\.?\\s*|約\\s*)?\\d+\\.?\\d*`, 'gi');
       if (cells.some(c => (c.match(looseFieldRe) || []).length >= 2)) return false;
     }
   }
