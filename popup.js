@@ -2353,7 +2353,28 @@ function parse(rawText, type, takeHalf) {
   return result;
 }
 
+// Markdown pipe-table — a header row, a "|----|----:|" alignment separator
+// row, then data rows, e.g. "| Size | Length (cm) | ... |". Without this
+// conversion the whole "| XS | 53 | ... |" line is read as a single opaque
+// size label with no measurements at all, since nothing else in this file
+// knows to split on "|".
+function isMarkdownTableFormat(rawText) {
+  const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
+  if (lines.length < 3) return false;
+  const isPipeRow = l => /^\|.*\|$/.test(l);
+  return isPipeRow(lines[0]) && /^\|[\s:|-]+\|$/.test(lines[1]);
+}
+
+function convertMarkdownTable(rawText) {
+  const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
+  return lines
+    .filter(l => /^\|.*\|$/.test(l) && !/^\|[\s:|-]+\|$/.test(l))
+    .map(l => l.slice(1, -1).split('|').map(c => c.trim()).join('\t'))
+    .join('\n');
+}
+
 function parseInternal(rawText, type, takeHalf) {
+  if (isMarkdownTableFormat(rawText)) rawText = convertMarkdownTable(rawText);
   // POM spec-sheet and Dim/Ref/Code tech-pack sheets: route to parseTabular before
   // isGradedFormat intercepts (it matches "POM code\t", "Dim\t", "Ref\t", "Code\t").
   // Distinguish tech-pack from graded by the presence of size labels — numeric
