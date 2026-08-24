@@ -89,9 +89,17 @@ const BAG_COLUMN_MAP = {
   'l':  'height',
   // Japanese bag field names
   '横':    'width',
+  'ヨコ':  'width',  // katakana form of 横
   '幅':    'width',
   '高さ':  'height',
   '縦':    'height',  // vertical — alternate word for height in product listings
+  // "タテ最短/タテ最長" (vertical shortest/longest) appear together on bags with
+  // an asymmetric or curved top edge. Only the longest maps to this tool's
+  // single "height" field — the tallest point is the conventional "height" a
+  // listing quotes — and the shortest is deliberately left unmapped (not
+  // "タテ最短": mapping both to "height" would let whichever is scanned first
+  // win regardless of which value is actually more useful).
+  'タテ最長': 'height',
   '奥行':  'depth',
   '奥行き': 'depth',
   // "長さ×高さ×奥行き" (length × height × depth) is a common Japanese
