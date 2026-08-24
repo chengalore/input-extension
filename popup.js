@@ -1561,8 +1561,13 @@ function parseSingleLine(rawText, type, takeHalf) {
       // No known field was found in the value side at all (regardless of whether
       // it contains digits — a size code like "02/M" does) — this "label: value"
       // line was actually a size-label declaration (e.g. "SIZE: S/M"), not a
-      // measurement line. Use the value as the label for the lines that follow.
-      pendingLabel = measurementStr;
+      // measurement line. Use the value as the label for the lines that follow —
+      // unless `label` is already a real, specific size code rather than the
+      // generic "ONE SIZE" placeholder normalizeLabel substitutes for boilerplate
+      // words like bare "SIZE"/"Approx.". E.g. "[size M] *Lay flat" — "M" (from
+      // the bracket) is the real label, and "*Lay flat" is just a footnote on
+      // the same line, not a size code to carry forward instead.
+      pendingLabel = label === 'ONE SIZE' ? measurementStr : label;
       continue;
     }
 
