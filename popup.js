@@ -91,6 +91,11 @@ const BAG_COLUMN_MAP = {
   '横':    'width',
   'ヨコ':  'width',  // katakana form of 横
   '幅':    'width',
+  // "上幅/下幅" (top width / bottom width) appear together on a tapered bag
+  // (e.g. a wider-mouthed tote). Only 上幅 maps here — same "pick one, don't
+  // let column order decide" reasoning as タテ最短/タテ最長 below — since the
+  // opening's width is the more conventional "width" a listing quotes.
+  '上幅':  'width',
   '高さ':  'height',
   '縦':    'height',  // vertical — alternate word for height in product listings
   // "タテ最短/タテ最長" (vertical shortest/longest) appear together on bags with
