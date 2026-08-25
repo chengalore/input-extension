@@ -77,6 +77,7 @@ const BAG_COLUMN_MAP = {
   'vertical':   'height',
   'depth':      'depth',
   'machi':      'depth',
+  'gusset':     'depth',
   'thickness':  'depth',
   'town':       'depth',  // English translation of Japanese "machi" (gusset/depth)
   'length':     'height',
@@ -1078,10 +1079,19 @@ function parseTabular(rawText, type, takeHalf) {
         const preambleLines = lines.slice(1, innerHeaderIdx);
         const innerHeaders = lines[innerHeaderIdx].split('\t').map(h => h.trim().toLowerCase());
         const innerIndexToField = {};
+        // A header's own trailing "(mm)"/"(in)" names its column's unit —
+        // e.g. "Width (mm)" — distinct from the qualifier parens elsewhere
+        // in this file that just get discarded (e.g. "Width (bottom)").
+        // Convert to cm, this tool's implicit unit throughout.
+        const innerIndexToUnit = {};
         innerHeaders.forEach((h, i) => {
+          const unitMatch = h.match(/\(\s*(mm|cm|in|inch(?:es)?)\s*\)\s*$/);
           const stripped = h.replace(/\s*\([^)]+\)$/, '').trim();
           const f = colMap[h] ?? colMap[stripped];
-          if (f) innerIndexToField[i] = f;
+          if (f) {
+            innerIndexToField[i] = f;
+            if (unitMatch) innerIndexToUnit[i] = unitMatch[1];
+          }
         });
         if (Object.keys(innerIndexToField).length > 0) {
           const dataLines = lines.slice(innerHeaderIdx + 1);
@@ -1096,7 +1106,12 @@ function parseTabular(rawText, type, takeHalf) {
             const measurements = {};
             for (const [idxStr, field] of Object.entries(innerIndexToField)) {
               const nums = extractNumbers(cols[Number(idxStr)] ?? '');
-              if (nums.length > 0 && !(field in measurements)) measurements[field] = nums[0];
+              if (nums.length === 0 || field in measurements) continue;
+              let value = nums[0];
+              const unit = innerIndexToUnit[idxStr];
+              if (unit === 'mm') value = Math.round((value / 10) * 100) / 100;
+              else if (unit === 'in' || unit?.startsWith('inch')) value = Math.round(value * 2.54 * 100) / 100;
+              measurements[field] = value;
             }
             normalizeMeasurements(measurements, takeHalf);
             computeSleeve(measurements);
