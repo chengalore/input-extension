@@ -1111,8 +1111,15 @@ function parseTabular(rawText, type, takeHalf) {
     const transposedFields = [];
     for (let i = 1; i < lines.length; i++) {
       const cols = lines[i].split('\t').map(c => c.trim());
-      const raw = (cols[0] ?? '').toLowerCase();
-      const field = colMap[raw] ?? colMap[raw.replace(/\s*\([^)]+\)$/, '').trim()];
+      // Strip a trailing colon — e.g. "Full length, short sleeves:" — before
+      // matching; matchGradedField runs first (not colMap) for the same
+      // reason tryParseSpecSheet does: a tagged result (e.g. "height$full")
+      // must reach the priority resolution below, not get bypassed by a
+      // coincidental plain colMap hit.
+      const rawOriginal = (cols[0] ?? '').replace(/:\s*$/, '').trim();
+      const raw = rawOriginal.toLowerCase();
+      const field = matchGradedField(rawOriginal, '', type)
+        ?? colMap[raw] ?? colMap[raw.replace(/\s*\([^)]+\)$/, '').trim()];
       const hasNumericValue = cols.slice(1).some(c => extractNumbers(c).length > 0);
       if (field && hasNumericValue) transposedFields.push({ field, values: cols.slice(1) });
     }
@@ -1135,7 +1142,28 @@ function parseTabular(rawText, type, takeHalf) {
         });
       }
       for (const [sizeLabel, measurements] of Object.entries(sizes)) {
+        // matchGradedField above can return a tagged intermediate value (e.g.
+        // "height$full") — resolve it the same way tryParseSpecSheet does,
+        // or it leaks into output as a raw untracked key instead of "height".
+        for (const key of WAIST_PRIORITY) { if (key in measurements) { measurements.waist = measurements[key]; break; } }
+        for (const key of WAIST_PRIORITY) delete measurements[key];
+
+        for (const key of HIP_PRIORITY) { if (key in measurements) { measurements.hip = measurements[key]; break; } }
+        for (const key of HIP_PRIORITY) delete measurements[key];
+
         normalizeMeasurements(measurements, takeHalf);
+
+        const wb = measurements._waistband ?? 0;
+        delete measurements._waistband;
+        if ('frontRise$incl' in measurements) measurements.frontRise = measurements['frontRise$incl'];
+        else if ('frontRise$excl' in measurements) measurements.frontRise = measurements['frontRise$excl'] + wb;
+        if ('backRise$incl' in measurements) measurements.backRise = measurements['backRise$incl'];
+        else if ('backRise$excl' in measurements) measurements.backRise = measurements['backRise$excl'] + wb;
+        for (const key of RISE_TAGS) delete measurements[key];
+
+        for (const key of HEIGHT_PRIORITY) { if (key in measurements) { measurements.height = measurements[key]; break; } }
+        for (const key of HEIGHT_PRIORITY) delete measurements[key];
+
         computeSleeve(measurements);
         const missing = TYPE_CONFIG[type].required.filter(k => !(k in measurements));
         if (missing.length) errors.push(`"${sizeLabel}" is missing required fields: ${missing.join(', ')}`);
@@ -1720,7 +1748,10 @@ function matchGradedField(desc, altDesc = '', type = '') {
   if (/sleeve length from (cb|centre back|center back)/.test(d)) return 'sleeve';
   // Plain "sleeve length" with no from-qualifier — respect the Sleeve=arm toggle
   if (/\bsleeve\b.*\blength\b/.test(d) && !/from/.test(d)) return TOPS_COLUMN_MAP['sleeve length'] ?? 'sleeve_length';
-  if (/(across shoulder|shoulder across|shoulder width|shoulder to shoulder)/.test(d)) return 'shoulder';
+  // "wide shoulders" — e.g. a machine-translated "Short-sleeved shirt with
+  // wide shoulders:" (likely originally 半袖 肩幅, "short-sleeve shoulder
+  // width") that lost the word "width" itself in translation.
+  if (/(across shoulder|shoulder across|shoulder width|shoulder to shoulder|wide shoulders?)/.test(d)) return 'shoulder';
   // "Chest Width Position from HPS" is a locator for where to measure chest
   // width, not the chest width itself — same "position" exclusion as hip/waist.
   // Bare "Right Chest"/"Left Chest" (no width/circ qualifier) is a print/logo
@@ -1842,6 +1873,17 @@ function matchGradedField(desc, altDesc = '', type = '') {
 
   // Waistband height/depth — stored internally, used to adjust rise if needed
   if (/waistband/.test(d) && /(height|depth)/.test(d)) return '_waistband';
+
+  // Bare "sleeve(s)" with no "width"/"length" qualifier at all — e.g. a
+  // machine-translated "Short sleeves:" (likely 半袖丈, "short-sleeve
+  // length", with "length" dropped in translation). Checked last, after
+  // every more specific sleeve/length pattern above, so it never steals a
+  // match from e.g. "sleeve width" (bicep) or "...length, short sleeves"
+  // (the qualifier on a "full length" height field, not a sleeve length
+  // itself) — respects the Sleeve=arm toggle like the "sleeve length" check.
+  if (!PANTS_TYPES.has(type) && /\bsleeves?\b/.test(d) && !/width|length|from|position/.test(d)) {
+    return TOPS_COLUMN_MAP['sleeve length'] ?? 'sleeve_length';
+  }
 
   return null;
 }
