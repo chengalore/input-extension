@@ -97,6 +97,7 @@ const BAG_COLUMN_MAP = {
   // let column order decide" reasoning as タテ最短/タテ最長 below — since the
   // opening's width is the more conventional "width" a listing quotes.
   '上幅':  'width',
+  '横幅':  'width',  // compound of 横 (side) + 幅 (width)
   '高さ':  'height',
   '縦':    'height',  // vertical — alternate word for height in product listings
   // "タテ最短/タテ最長" (vertical shortest/longest) appear together on bags with
@@ -1085,8 +1086,9 @@ function parseTabular(rawText, type, takeHalf) {
         // Convert to cm, this tool's implicit unit throughout.
         const innerIndexToUnit = {};
         innerHeaders.forEach((h, i) => {
-          const unitMatch = h.match(/\(\s*(mm|cm|in|inch(?:es)?)\s*\)\s*$/);
-          const stripped = h.replace(/\s*\([^)]+\)$/, '').trim();
+          const unitMatch = h.match(/[(（]\s*(mm|cm|in|inch(?:es)?)\s*[)）]\s*$/);
+          // Qualifier parens can be full-width too — e.g. "横幅（W）"
+          const stripped = h.replace(/\s*[(（][^)）]+[)）]$/, '').trim();
           const f = colMap[h] ?? colMap[stripped];
           if (f) {
             innerIndexToField[i] = f;
@@ -2194,7 +2196,12 @@ function isGradedFormat(rawText) {
 
 function isTabularFormat(rawText) {
   const firstLine = rawText.trim().split('\n')[0].toLowerCase().trim();
-  return firstLine.startsWith('size\t') || firstLine === 'size';
+  // "サイズ" (Japanese "size") — without this, a bag-type sheet using it as
+  // the preamble-format header (e.g. "サイズ\nフリー\n横幅...\t高さ...\tマチ...")
+  // never reaches parseTabular at all, since bag isn't a TOPS/PANTS type and
+  // this is the only other tabular-dispatch signal for it.
+  return firstLine.startsWith('size\t') || firstLine === 'size'
+    || firstLine.startsWith('サイズ\t') || firstLine === 'サイズ';
 }
 
 function isSingleLineFormat(rawText) {
