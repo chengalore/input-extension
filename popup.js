@@ -63,9 +63,17 @@ const TYPE_CONFIG = {
     required: ['inseam', 'waist', 'hip', 'thigh'],
     optional: ['knee', 'legOpening', 'frontRise', 'backRise'],
   },
+  // Kids charts (e.g. "2T, 88-93cm height, 13-14kg body weight, 50cm waist")
+  // typically give height + waist and never bust — unlike the adult tops
+  // types above, bust is only optional here so a genuinely complete kids
+  // sheet doesn't get flagged as missing a field it was never going to have.
+  kids: {
+    required: ['height', 'waist'],
+    optional: ['bust', 'shoulder', 'sleeve_length', 'sleeve', 'hip', 'hem'],
+  },
 };
 
-const TOPS_TYPES  = new Set(['shirt', 'tShirt', 'jacket', 'coat', 'dress', 'dressALine', 'dressSleeve', 'tunicSleeve', 'sweater', 'top', 'skirt']);
+const TOPS_TYPES  = new Set(['shirt', 'tShirt', 'jacket', 'coat', 'dress', 'dressALine', 'dressSleeve', 'tunicSleeve', 'sweater', 'top', 'skirt', 'kids']);
 const PANTS_TYPES = new Set(['pants', 'shorts']);
 const BAG_TYPES   = new Set(['bag', 'wallet']);
 
@@ -286,6 +294,7 @@ const TABLE_FIELD_ORDER = {
   skirt:       ['height', 'waist', 'hip', 'hem'],
   pants:       ['inseam', 'waist', 'hip', 'thigh', 'knee', 'legOpening', 'frontRise', 'backRise'],
   shorts:      ['inseam', 'waist', 'hip', 'thigh', 'knee', 'legOpening', 'frontRise', 'backRise'],
+  kids:        ['height', 'waist', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'hip', 'hem'],
 };
 
 function normalizeMeasurements(measurements, takeHalf) {
