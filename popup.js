@@ -492,6 +492,94 @@ function tryParseGradingDeltaSheet(rows, type, takeHalf) {
   return { sizes: expandInseamCombinations(sizes), errors };
 }
 
+// ─── Split-label table parser ────────────────────────────────────────────────
+// A copy-paste artifact from certain rendered web tables: the numeric data
+// pastes as one block — a size-code header row, then N tab-separated
+// all-numeric rows with no field name on them at all — followed, after a
+// blank line, by a second block naming each field one per line, often
+// interleaved with section-title lines ("one piece", "Apron skirt") and
+// trailing empty tabs left over from the row's now-detached data cells, e.g.
+// "MP\tM\tL\n38\t38\t40\n55\t58\t58.5\n\nSize (approx./cm)\t\t\none piece\n
+// shoulder width\t\t\nSleeve Length\t\t". Matched purely positionally: the
+// Nth recognized field name pairs with the Nth data row, in order — any
+// line that isn't a recognized field name (a section title, a units
+// caption, a trailing nav link) is skipped rather than breaking the match.
+function tryParseSplitLabelTable(rawText, type, takeHalf) {
+  const lines = rawText.split('\n').map(l => l.trim());
+  let i = 0;
+  while (i < lines.length && lines[i] === '') i++;
+  if (i >= lines.length) return null;
+  const sizeLabels = lines[i].split('\t').map(c => c.trim()).filter(Boolean);
+  if (sizeLabels.length < 2) return null;
+  i++;
+
+  const dataRows = [];
+  while (i < lines.length && lines[i] !== '') {
+    const cells = lines[i].split('\t').map(c => c.trim());
+    if (cells.length !== sizeLabels.length || !cells.every(c => /^\d+\.?\d*$/.test(c))) break;
+    dataRows.push(cells);
+    i++;
+  }
+  // Require at least a couple of data rows — a single row is too easily a
+  // coincidental match for an unrelated format.
+  if (dataRows.length < 2) return null;
+  while (i < lines.length && lines[i] === '') i++;
+  if (i >= lines.length) return null;
+
+  const colMap = TOPS_TYPES.has(type) ? TOPS_COLUMN_MAP
+               : PANTS_TYPES.has(type) ? PANTS_COLUMN_MAP
+               : BAG_COLUMN_MAP;
+  const labelFields = [];
+  for (; i < lines.length && labelFields.length < dataRows.length; i++) {
+    const line = lines[i];
+    if (!line) continue;
+    const field = matchGradedField(line, '', type) ?? colMap[line.toLowerCase()];
+    if (field) labelFields.push(field);
+  }
+  if (labelFields.length !== dataRows.length) return null;
+
+  const sizes = {};
+  const errors = [];
+  for (const label of sizeLabels) sizes[label] = {};
+
+  dataRows.forEach((cells, rowIdx) => {
+    const field = labelFields[rowIdx];
+    cells.forEach((cellStr, colIdx) => {
+      const val = parseFloat(cellStr);
+      if (isNaN(val) || val < 0) return;
+      const sizeLabel = sizeLabels[colIdx];
+      if (!(field in sizes[sizeLabel])) sizes[sizeLabel][field] = val;
+    });
+  });
+
+  for (const [sizeLabel, measurements] of Object.entries(sizes)) {
+    for (const key of WAIST_PRIORITY) { if (key in measurements) { measurements.waist = measurements[key]; break; } }
+    for (const key of WAIST_PRIORITY) delete measurements[key];
+
+    for (const key of HIP_PRIORITY) { if (key in measurements) { measurements.hip = measurements[key]; break; } }
+    for (const key of HIP_PRIORITY) delete measurements[key];
+
+    normalizeMeasurements(measurements, takeHalf);
+
+    const wb = measurements._waistband ?? 0;
+    delete measurements._waistband;
+    if ('frontRise$incl' in measurements) measurements.frontRise = measurements['frontRise$incl'];
+    else if ('frontRise$excl' in measurements) measurements.frontRise = measurements['frontRise$excl'] + wb;
+    if ('backRise$incl' in measurements) measurements.backRise = measurements['backRise$incl'];
+    else if ('backRise$excl' in measurements) measurements.backRise = measurements['backRise$excl'] + wb;
+    for (const key of RISE_TAGS) delete measurements[key];
+
+    for (const key of HEIGHT_PRIORITY) { if (key in measurements) { measurements.height = measurements[key]; break; } }
+    for (const key of HEIGHT_PRIORITY) delete measurements[key];
+
+    computeSleeve(measurements);
+    const missing = TYPE_CONFIG[type].required.filter(k => !(k in measurements));
+    if (missing.length) errors.push(`"${sizeLabel}" is missing required fields: ${missing.join(', ')}`);
+  }
+
+  return { sizes: expandInseamCombinations(sizes), errors };
+}
+
 // ─── POM spec-sheet parser ───────────────────────────────────────────────────
 // "POM" (Point of Measure) sheets: col 0 = measurement description,
 // cols 1-N = one value per size. The header row has "POM" as col 0,
@@ -780,6 +868,11 @@ function parseTabular(rawText, type, takeHalf) {
   // Grading-delta sheet: no header row, detected by the 9-column row shape
   const gradingDeltaResult = tryParseGradingDeltaSheet(tsvRows, type, takeHalf);
   if (gradingDeltaResult) return gradingDeltaResult;
+
+  // Split-label table: numeric data block, blank line, then field names —
+  // a rendered-web-table copy-paste artifact
+  const splitLabelResult = tryParseSplitLabelTable(rawText, type, takeHalf);
+  if (splitLabelResult) return splitLabelResult;
 
   // Reconvert TSV rows to tab-joined lines for the rest of the logic.
   // Don't trim — preserves leading tabs that mark an empty size-column header.
