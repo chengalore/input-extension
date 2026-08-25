@@ -889,6 +889,9 @@ function parseTabular(rawText, type, takeHalf) {
   // produces: "FREE SIZE(03)\t110cm" then "43.3inch\t55cm" then "21.7inch\t51cm" etc.
   // A continuation line is detected when its first cell looks like a measurement value.
   const MEASUREMENT_LEAD_RE = /^\d+\.?\d*\s*(cm|inch|mm|in)\b/i;
+  const earlyColMap = TOPS_TYPES.has(type) ? TOPS_COLUMN_MAP
+                     : PANTS_TYPES.has(type) ? PANTS_COLUMN_MAP
+                     : BAG_COLUMN_MAP;
   if (lines.slice(1).some(l => MEASUREMENT_LEAD_RE.test(l.split('\t')[0] ?? ''))) {
     const repaired = [];
     let pending = null;
@@ -897,8 +900,16 @@ function parseTabular(rawText, type, takeHalf) {
       // The first data row (idx === 1) can never be a continuation — a continuation
       // only makes sense once a real data row has already been established as `pending`,
       // otherwise a legitimate single data row whose own first cell is a bare measurement
-      // (e.g. a bag's "long" column) gets wrongly swallowed into the header row.
-      if (idx > 1 && pending !== null && MEASUREMENT_LEAD_RE.test(cols[0] ?? '')) {
+      // (e.g. a bag's "long" column) gets wrongly swallowed into the header row. Nor can a
+      // row merge into a `pending` that is itself a field-name header row (e.g. a
+      // preamble-format "横幅（W）\t高さ（H）" header immediately followed by its own
+      // genuine one-row-of-values data row) — that's two separate real rows, not a
+      // wrapped-cell fragment, and merging would silently drop the next row's first value.
+      const pendingIsHeader = pending !== null && pending.some(c => {
+        const cl = c.trim().toLowerCase();
+        return earlyColMap[cl] ?? earlyColMap[cl.replace(/\s*[(（][^)）]+[)）]$/, '').trim()];
+      });
+      if (idx > 1 && pending !== null && !pendingIsHeader && MEASUREMENT_LEAD_RE.test(cols[0] ?? '')) {
         pending.push(...cols.slice(1)); // discard inch alt, append remaining values
       } else {
         if (pending !== null) repaired.push(pending.join('\t'));
