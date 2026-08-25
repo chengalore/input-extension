@@ -859,11 +859,20 @@ function parseTabular(rawText, type, takeHalf) {
   // to (e.g. "トップス身幅" / "パンツ股下"); strip that too so the bare field name
   // ("身幅" / "股下") resolves against the map.
   const GARMENT_PREFIX_JA = /^(?:パンツ|トップス|ボトムス|スカート|ワンピース)/;
+  // A garment with a detachable component (e.g. a coat's zip-out liner) can
+  // list a full parallel field set per component — "Main body shoulder
+  // width" / "Liner shoulder width". Only one component's values fit this
+  // tool's flat single-garment schema, so strip the component prefix and let
+  // first-occurrence-wins (column order) naturally prefer "Main body" over
+  // "Liner"/"Lining", matching this file's "Main unit"/"Main body" bag
+  // convention for the primary item over an accessory.
+  const COMPONENT_PREFIX_EN = /^(?:main\s+body|liner|lining)\s+/i;
   const fieldForHeader = h => {
     const stripped = h.replace(/^(?:[(（][^)）]+[)）]|\[[^\]]+\])\s*/, '')
                       .replace(/\s*[(（][^)）]+[)）]$/, '').trim();
     const strippedGarment = stripped.replace(GARMENT_PREFIX_JA, '');
-    return colMap[h] ?? colMap[stripped] ?? colMap[strippedGarment];
+    const strippedComponent = stripped.replace(COMPONENT_PREFIX_EN, '');
+    return colMap[h] ?? colMap[stripped] ?? colMap[strippedGarment] ?? colMap[strippedComponent];
   };
 
   let sizeIdx = headers.findIndex(h => h === 'size');
@@ -1044,6 +1053,9 @@ function parseTabular(rawText, type, takeHalf) {
 
   for (let i = 1; i < lines.length; i++) {
     const cols = lines[i].split('\t').map(c => c.trim());
+    // Skip an exact repeat of the header row — an accidental duplicate paste
+    // (the whole header+data block pasted twice), not a genuine second row.
+    if (cols.length === headers.length && cols.every((c, ci) => c.toLowerCase() === headers[ci])) continue;
     const sizeLabel = normalizeLabel(cols[sizeIdx] ?? '');
     if (!sizeLabel) continue;
 
