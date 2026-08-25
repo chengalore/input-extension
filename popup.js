@@ -63,17 +63,9 @@ const TYPE_CONFIG = {
     required: ['inseam', 'waist', 'hip', 'thigh'],
     optional: ['knee', 'legOpening', 'frontRise', 'backRise'],
   },
-  // Kids charts (e.g. "2T, 88-93cm height, 13-14kg body weight, 50cm waist")
-  // typically give height + waist and never bust — unlike the adult tops
-  // types above, bust is only optional here so a genuinely complete kids
-  // sheet doesn't get flagged as missing a field it was never going to have.
-  kids: {
-    required: ['height', 'waist'],
-    optional: ['bust', 'shoulder', 'sleeve_length', 'sleeve', 'hip', 'hem'],
-  },
 };
 
-const TOPS_TYPES  = new Set(['shirt', 'tShirt', 'jacket', 'coat', 'dress', 'dressALine', 'dressSleeve', 'tunicSleeve', 'sweater', 'top', 'skirt', 'kids']);
+const TOPS_TYPES  = new Set(['shirt', 'tShirt', 'jacket', 'coat', 'dress', 'dressALine', 'dressSleeve', 'tunicSleeve', 'sweater', 'top', 'skirt']);
 const PANTS_TYPES = new Set(['pants', 'shorts']);
 const BAG_TYPES   = new Set(['bag', 'wallet']);
 
@@ -294,7 +286,6 @@ const TABLE_FIELD_ORDER = {
   skirt:       ['height', 'waist', 'hip', 'hem'],
   pants:       ['inseam', 'waist', 'hip', 'thigh', 'knee', 'legOpening', 'frontRise', 'backRise'],
   shorts:      ['inseam', 'waist', 'hip', 'thigh', 'knee', 'legOpening', 'frontRise', 'backRise'],
-  kids:        ['height', 'waist', 'bust', 'shoulder', 'sleeve_length', 'sleeve', 'hip', 'hem'],
 };
 
 function normalizeMeasurements(measurements, takeHalf) {
@@ -305,6 +296,24 @@ function normalizeMeasurements(measurements, takeHalf) {
       measurements[field] = measurements[field] / 2;
     }
   }
+}
+
+// "Kids" is a toggle, not its own product type — kids charts (height, weight,
+// waist) never supply every field a real garment type requires (e.g. tShirt
+// also needs bust), so this backfills any still-missing required field with
+// an obviously-fake placeholder purely so the item can still be entered as
+// that real type. Only called when the Kids toggle is on; a regular
+// (non-kids) parse never mocks anything and keeps reporting missing fields
+// as errors.
+const KIDS_MOCK_VALUE = 0;
+function applyKidsMock(sizes, type) {
+  const required = TYPE_CONFIG[type].required;
+  for (const measurements of Object.values(sizes)) {
+    for (const field of required) {
+      if (!(field in measurements)) measurements[field] = KIDS_MOCK_VALUE;
+    }
+  }
+  return [];
 }
 
 // ─── TSV parser (handles quoted multi-line cells) ────────────────────────────
@@ -2643,6 +2652,7 @@ const halfBtn   = document.getElementById('half-btn');
 const yukiBtn   = document.getElementById('yuki-btn');
 const sleeveBtn = document.getElementById('sleeve-btn');
 const tableBtn  = document.getElementById('table-btn');
+const kidsBtn   = document.getElementById('kids-btn');
 const copyBtn   = document.getElementById('copy-btn');
 const sendBtn   = document.getElementById('send-btn');
 const inputText = document.getElementById('input-text');
@@ -2693,6 +2703,13 @@ tableBtn.addEventListener('click', () => {
   saveState();
 });
 
+let kidsMode = false;
+kidsBtn.addEventListener('click', () => {
+  kidsMode = !kidsMode;
+  kidsBtn.classList.toggle('active', kidsMode);
+  saveState();
+});
+
 let lastParsedSizes = null;
 let lastParsedType = null;
 
@@ -2708,7 +2725,12 @@ parseBtn.addEventListener('click', () => {
     return;
   }
 
-  const { sizes, errors } = parse(raw, type, takeHalf);
+  const { sizes, errors: parseErrors } = parse(raw, type, takeHalf);
+  // Kids toggle: backfill any still-missing required field with an obviously
+  // fake placeholder so the item can be entered as a real type (e.g. tShirt)
+  // even though a kids chart never supplies everything that type requires.
+  // Only applies when the toggle is on — a regular parse is untouched.
+  const errors = kidsMode ? applyKidsMock(sizes, type) : parseErrors;
 
   if (Object.keys(sizes).length === 0) {
     showError(errors.length ? errors.join('\n') : 'No measurements found. Check the format.');
@@ -2871,6 +2893,7 @@ function saveState() {
       yukiAsSleeve,
       sleeveAsArm,
       tableMode,
+      kidsMode,
       lastParsedSizes,
       lastParsedType,
       outputText: outputPre.textContent,
@@ -2895,6 +2918,9 @@ async function restoreState() {
 
   tableMode = !!s.tableMode;
   tableBtn.classList.toggle('active', tableMode);
+
+  kidsMode = !!s.kidsMode;
+  kidsBtn.classList.toggle('active', kidsMode);
 
   lastParsedSizes = s.lastParsedSizes ?? null;
   lastParsedType = s.lastParsedType ?? null;
