@@ -2480,12 +2480,16 @@ function parse(rawText, type, takeHalf) {
 // row, then data rows, e.g. "| Size | Length (cm) | ... |". Without this
 // conversion the whole "| XS | 53 | ... |" line is read as a single opaque
 // size label with no measurements at all, since nothing else in this file
-// knows to split on "|".
+// knows to split on "|". The header+separator pair can appear anywhere in
+// the pasted text, not just on the very first line — e.g. a chat-style
+// preamble sentence ("Here's the size chart as a table:") often precedes it.
 function isMarkdownTableFormat(rawText) {
   const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
-  if (lines.length < 3) return false;
   const isPipeRow = l => /^\|.*\|$/.test(l);
-  return isPipeRow(lines[0]) && /^\|[\s:|-]+\|$/.test(lines[1]);
+  for (let i = 0; i < lines.length - 1; i++) {
+    if (isPipeRow(lines[i]) && /^\|[\s:|-]+\|$/.test(lines[i + 1])) return true;
+  }
+  return false;
 }
 
 function convertMarkdownTable(rawText) {
