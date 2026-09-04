@@ -2316,7 +2316,12 @@ function isBlockFormat(rawText, type) {
                : PANTS_TYPES.has(type) ? PANTS_COLUMN_MAP
                : null;
   if (!colMap) return true;
-  return rawText.split('\n').some(l => {
+  // A field's value can be pasted onto its own line instead of staying after
+  // the colon (e.g. "Length:\n60cm/64cm") — join those before checking, or a
+  // genuinely block-format sheet built entirely of "Label:\nvalue" pairs
+  // never has a single line with both, and this check wrongly rejects it.
+  const lines = joinColonThenValueLine(rawText.split('\n'), colMap);
+  return lines.some(l => {
     const m = l.trim().match(/^(.+?)\s*[:：]\s*(.+)$/);
     return m && m[1].toLowerCase().trim() in colMap;
   });
@@ -2344,6 +2349,28 @@ function joinWrappedLabelLines(lines, colMap) {
           continue;
         }
       }
+    }
+    out.push(line);
+  }
+  return out;
+}
+
+// Join a "Label:" line with nothing after the colon onto the immediately
+// following value-only line — e.g. "Length:\n60cm/64cm" or "bust:\n102cm",
+// where the value got pasted onto its own line instead of staying after the
+// colon. Only joins when the label is a recognized field, to avoid false
+// positives on an unrelated bare "Label:" line (a real section heading).
+function joinColonThenValueLine(lines, colMap) {
+  if (!colMap) return lines;
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const m = line.trim().match(/^(.+?)\s*[:：]\s*$/);
+    const next = lines[i + 1];
+    if (m && next && next.trim() && colMap[m[1].trim().toLowerCase()]) {
+      out.push(`${m[1]}: ${next.trim()}`);
+      i++;
+      continue;
     }
     out.push(line);
   }
@@ -2381,7 +2408,14 @@ function parseBlockFormat(rawText, type, takeHalf) {
                : null;
   if (!colMap) return { sizes: {}, errors: ['Block format not supported for this type.'] };
 
-  const lines = joinContinuationLines(rawText);
+  // "Field: num1/num2" (e.g. "Length: 60cm/64cm", likely front/back) — use the
+  // second number, before line-splitting treats them as unrelated fragments.
+  // Each number may carry its own unit (unlike the plain "34/121" case), and
+  // this matches across the colon even when the value is on its own line, so
+  // "Length:\n60cm/64cm" collapses straight to "Length:64cm".
+  rawText = rawText.replace(/([:：]\s*)\d+\.?\d*\s*(?:cm|mm|in|inch)?\s*\/\s*(\d+\.?\d*\s*(?:cm|mm|in|inch)?)/gi, '$1$2');
+
+  const lines = joinColonThenValueLine(joinContinuationLines(rawText), colMap);
   const sizes = {};
   const errors = [];
   let currentSize = null;
@@ -2428,7 +2462,9 @@ function parseBlockFormat(rawText, type, takeHalf) {
     const sizeMatch = line.match(/^\[(.+)\]$/);
     if (sizeMatch) {
       flushSize();
-      currentSize = sizeMatch[1].replace(/^size\s+/i, '').trim();
+      // "Size S" and "L size" both name the same size code, just with the
+      // word "size" on opposite sides.
+      currentSize = sizeMatch[1].replace(/^size\s+/i, '').replace(/\s+size$/i, '').trim();
       continue;
     }
 
