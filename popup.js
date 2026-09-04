@@ -174,6 +174,7 @@ const TOPS_COLUMN_MAP = {
   'ヒップ': 'hip',
   '裾幅':  'hem',
   // Korean field names
+  '총장':  'height',  // bare "total length" (no front/back qualifier)
   '앞총장': 'height',
   '뒤총장': 'height',
   '어깨너비': 'shoulder',
