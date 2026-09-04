@@ -1288,6 +1288,23 @@ function splitLine(line) {
   return [normalizeLabel(m[1]), m[2].trim()];
 }
 
+// Default width/height/depth positional order for an unlabeled bag triple —
+// but if the positional "height" (middle value) is implausibly small next to
+// BOTH other values (under half the smaller of the two), that's a strong
+// signal the source's order doesn't actually follow W/H/D convention, since a
+// bag's height is rarely its thinnest dimension. In that case use the
+// largest value as height instead, and the remaining two by descending size
+// for width/depth — e.g. "42cm x 2cm x 34cm" → height 42, width 34, depth 2
+// (not height 2, which the plain positional read would give).
+function assignBagTriple(v1, v2, v3) {
+  const minOther = Math.min(v1, v3);
+  if (v2 < minOther / 2 && v2 !== Math.max(v1, v2, v3)) {
+    const [height, width, depth] = [v1, v2, v3].sort((a, b) => b - a);
+    return { width, height, depth };
+  }
+  return { width: v1, height: v2, depth: v3 };
+}
+
 function parseSegment(segment, type) {
   const result = {};
 
@@ -1296,22 +1313,30 @@ function parseSegment(segment, type) {
   const parenMatch = segment.match(/\(\s*([\d.]+)\s*[xX×]\s*[\d.]+\s*\)\s*[xX×]\s*([\d.]+)\s*[xX×]\s*([\d.]+)/i);
   if (parenMatch) {
     if (BAG_TYPES.has(type)) {
-      result.width = parseFloat(parenMatch[1]);
-      result.height = parseFloat(parenMatch[2]);
-      result.depth = parseFloat(parenMatch[3]);
+      Object.assign(result, assignBagTriple(parseFloat(parenMatch[1]), parseFloat(parenMatch[2]), parseFloat(parenMatch[3])));
     }
     return result;
   }
 
   // Bare "W x H x D [cm]" with no labels, letters, or parens at all — e.g.
-  // "26x18x3.5cm". Same width/height/depth order as the parenMatch case above,
-  // for consistency, since there's no other signal to go on.
-  const bareTripleMatch = segment.match(/^([\d.]+)\s*[xX×]\s*([\d.]+)\s*[xX×]\s*([\d.]+)\s*(?:cm|mm|in|inch)?\s*$/i);
+  // "26x18x3.5cm" or "42cm x 2cm x 34cm" (a unit can follow each number, not
+  // just the last one). Same width/height/depth order as the parenMatch case
+  // above, for consistency, since there's no other signal to go on.
+  const bareTripleMatch = segment.match(/^([\d.]+)\s*(cm|mm|in|inch)?\s*[xX×]\s*([\d.]+)\s*(cm|mm|in|inch)?\s*[xX×]\s*([\d.]+)\s*(cm|mm|in|inch)?\s*$/i);
   if (bareTripleMatch) {
     if (BAG_TYPES.has(type)) {
-      result.width = parseFloat(bareTripleMatch[1]);
-      result.height = parseFloat(bareTripleMatch[2]);
-      result.depth = parseFloat(bareTripleMatch[3]);
+      const toCm = (num, unit) => {
+        let value = parseFloat(num);
+        const u = (unit ?? '').toLowerCase();
+        if (u === 'mm') value = Math.round((value / 10) * 100) / 100;
+        else if (u === 'in' || u === 'inch') value = Math.round(value * 2.54 * 100) / 100;
+        return value;
+      };
+      Object.assign(result, assignBagTriple(
+        toCm(bareTripleMatch[1], bareTripleMatch[2]),
+        toCm(bareTripleMatch[3], bareTripleMatch[4]),
+        toCm(bareTripleMatch[5], bareTripleMatch[6]),
+      ));
     }
     return result;
   }
