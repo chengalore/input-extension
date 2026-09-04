@@ -1320,9 +1320,11 @@ function parseSegment(segment, type) {
 
   // Bare "W x H x D [cm]" with no labels, letters, or parens at all — e.g.
   // "26x18x3.5cm" or "42cm x 2cm x 34cm" (a unit can follow each number, not
-  // just the last one). Same width/height/depth order as the parenMatch case
-  // above, for consistency, since there's no other signal to go on.
-  const bareTripleMatch = segment.match(/^([\d.]+)\s*(cm|mm|in|inch)?\s*[xX×]\s*([\d.]+)\s*(cm|mm|in|inch)?\s*[xX×]\s*([\d.]+)\s*(cm|mm|in|inch)?\s*$/i);
+  // just the last one), optionally prefixed with "Approx./Approximately"
+  // (e.g. "Approximately 2 x 9 x 12 cm"). Same width/height/depth order as
+  // the parenMatch case above, for consistency, since there's no other
+  // signal to go on.
+  const bareTripleMatch = segment.match(/^(?:approx(?:imately)?\.?\s+)?([\d.]+)\s*(cm|mm|in|inch)?\s*[xX×]\s*([\d.]+)\s*(cm|mm|in|inch)?\s*[xX×]\s*([\d.]+)\s*(cm|mm|in|inch)?\s*$/i);
   if (bareTripleMatch) {
     if (BAG_TYPES.has(type)) {
       const toCm = (num, unit) => {
