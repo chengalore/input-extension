@@ -2659,7 +2659,37 @@ function convertMarkdownTable(rawText) {
     .join('\n');
 }
 
+// Raw HTML table markup — some sites' own "copy" button writes innerHTML to
+// the clipboard instead of rendered text, so pasting can hand this tool
+// literal "<table><tr><td>...</td></tr></table>" markup rather than a
+// tab-separated grid. A page sometimes repeats the same chart once per unit
+// (e.g. a "CM" table followed by an "IN" table) — only the first <table> is
+// used, since this tool's implicit unit is already cm throughout.
+function isHtmlTableFormat(rawText) {
+  return /<table[\s>]/i.test(rawText);
+}
+
+function convertHtmlTable(rawText) {
+  const tableMatch = rawText.match(/<table[\s\S]*?<\/table>/i);
+  if (!tableMatch) return rawText;
+  const decode = s => s
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+  const rows = [...tableMatch[0].matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map(rowMatch =>
+    [...rowMatch[1].matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)].map(cellMatch => decode(cellMatch[1])).join('\t')
+  );
+  return rows.join('\n');
+}
+
 function parseInternal(rawText, type, takeHalf) {
+  if (isHtmlTableFormat(rawText)) rawText = convertHtmlTable(rawText);
   if (isMarkdownTableFormat(rawText)) rawText = convertMarkdownTable(rawText);
   // POM spec-sheet and Dim/Ref/Code tech-pack sheets: route to parseTabular before
   // isGradedFormat intercepts (it matches "POM code\t", "Dim\t", "Ref\t", "Code\t").
