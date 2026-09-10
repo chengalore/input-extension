@@ -1784,7 +1784,21 @@ function parseSingleLine(rawText, type, takeHalf) {
     storeMeasurements(label, measurements);
   }
 
-  if (implicitOneSize) storeMeasurements('ONE SIZE', implicitOneSize);
+  if (implicitOneSize) {
+    if (Object.keys(sizes).length > 0) {
+      // A field that appeared before any real per-size line (e.g. "Inseam:
+      // 77.5cm" ahead of "Size 24: Waist 64cm, Hips 87.5cm, ...") applies to
+      // every size — this sheet has one shared inseam and per-size everything
+      // else — not to a separate "ONE SIZE" bucket of its own.
+      for (const measurements of Object.values(sizes)) {
+        for (const [k, v] of Object.entries(implicitOneSize)) {
+          if (!(k in measurements)) measurements[k] = v;
+        }
+      }
+    } else {
+      storeMeasurements('ONE SIZE', implicitOneSize);
+    }
+  }
 
   for (const [sizeLabel, measurements] of Object.entries(sizes)) {
     normalizeMeasurements(measurements, takeHalf);
@@ -2270,7 +2284,8 @@ function isSingleLineFormat(rawText) {
 // Field-per-line format: each line is "FieldName: value1/value2/..."
 // Detected when the first line's label is a known output field for the current type.
 function isFieldValueFormat(rawText, type) {
-  const firstLine = rawText.trim().split('\n')[0];
+  const lines = rawText.trim().split('\n');
+  const firstLine = lines[0];
   const split = splitLine(firstLine);
   if (!split) return false;
   const [label, valueStr] = split;
@@ -2284,6 +2299,18 @@ function isFieldValueFormat(rawText, type) {
   // size, not multiple size-values for the same field like "Waist: 60/65/70"),
   // this isn't actually the multi-size "Field: v1/v2/v3" format at all.
   if (Object.keys(extractKnownFieldPairs(valueStr, colMap)).length > 0) return false;
+  // This format repeats "Field: v1/v2/v3" one recognized field per line — if
+  // a second line exists, it must follow the same shape too, or this isn't
+  // really that format at all. E.g. "Inseam: 77.5cm\nSize 24: Waist 64cm,
+  // Hips 87.5cm, ..." — a single field shared by every size, followed by
+  // per-size blocks — coincidentally matches on line 1 alone ("Inseam" is a
+  // known field, and "77.5cm" has no second colon), but "Size 24" isn't a
+  // recognized field, so this is actually a different structure entirely,
+  // one parseSingleLine already handles correctly on its own.
+  if (lines.length > 1) {
+    const nextSplit = splitLine(lines[1]);
+    if (!nextSplit || !(nextSplit[0].toLowerCase() in colMap)) return false;
+  }
   return true;
 }
 
