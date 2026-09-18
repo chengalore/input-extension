@@ -115,6 +115,13 @@ const BAG_COLUMN_MAP = {
   '長さ':  'width',
   'まち':  'depth',  // hiragana for machi (gusset)
   'マチ':  'depth',  // katakana for machi (gusset)
+  // Korean bag field names — the standard 가로×세로×폭 (width × height ×
+  // depth) convention; 핸들 드롭/스트랩 드롭 (handle/strap drop) are the
+  // accessory's own strap length, not a bag dimension, so deliberately have
+  // no entry here.
+  '세로':  'height',
+  '가로':  'width',
+  '폭':    'depth',
 };
 
 // Column header (lowercase) → output field name, for tops
