@@ -226,6 +226,8 @@ const PANTS_COLUMN_MAP = {
   'around the thigh':  'thigh',
   'inseam':            'inseam',
   'crotch length':     'inseam',
+  'lower length':      'inseam',
+  'also, the lower length': 'inseam',
   'knee':              'knee',
   'leg opening':       'legOpening',
   'leg bottom width':  'legOpening',
@@ -1184,7 +1186,16 @@ function parseTabular(rawText, type, takeHalf) {
       for (const { field, values } of transposedFields) {
         sizeLabels.forEach((label, si) => {
           if (!label) return;
-          const val = parseFloat((values[si] ?? '').replace(',', '.'));
+          const cell = values[si] ?? '';
+          // Comma-decimal locales ("24,5") first; a spelled-out number
+          // ("twenty five", mixed in among plain digits elsewhere in the
+          // same row) falls back to extractNumbers, which already handles
+          // both digit and text numbers.
+          let val = parseFloat(cell.replace(',', '.'));
+          if (isNaN(val)) {
+            const nums = extractNumbers(cell);
+            val = nums.length > 0 ? nums[0] : NaN;
+          }
           // Negative values are always a grading delta/increment, never a real
           // measurement — no field in TYPE_CONFIG can legitimately be negative.
           if (!isNaN(val) && val >= 0 && !(field in sizes[label])) sizes[label][field] = val;
