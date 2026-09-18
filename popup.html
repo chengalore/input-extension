@@ -39,15 +39,13 @@
       ></textarea>
     </div>
 
-    <button id="half-btn" class="toggle-btn">Take half</button>
-
-    <button id="yuki-btn" class="toggle-btn">Yuki = arm</button>
-
-    <button id="sleeve-btn" class="toggle-btn">Sleeve = arm</button>
-
-    <button id="table-btn" class="toggle-btn">Table output</button>
-
-    <button id="kids-btn" class="toggle-btn">Kids (mock missing fields)</button>
+    <div class="toggle-grid">
+      <button id="half-btn" class="toggle-btn">Take half</button>
+      <button id="yuki-btn" class="toggle-btn">Yuki = arm</button>
+      <button id="sleeve-btn" class="toggle-btn">Sleeve = arm</button>
+      <button id="table-btn" class="toggle-btn">Table output</button>
+      <button id="kids-btn" class="toggle-btn" title="Mock missing required fields">Kids</button>
+    </div>
 
     <button id="parse-btn">Parse</button>
 
@@ -59,10 +57,26 @@
           <button id="send-btn" class="copy-btn">Send to page</button>
         </div>
       </div>
-      <pre id="output"></pre>
+      <pre id="output" class="output-compact"></pre>
     </div>
 
     <div id="error-msg" class="error hidden"></div>
+
+    <hr class="divider" />
+
+    <button id="page-info-btn">Get info from page</button>
+
+    <div id="page-info-section" class="hidden">
+      <div class="output-header">
+        <label>Page info output</label>
+        <div class="output-actions">
+          <button id="page-info-copy-btn" class="copy-btn">Copy</button>
+        </div>
+      </div>
+      <pre id="page-info-output" class="output-compact"></pre>
+    </div>
+
+    <div id="page-info-error" class="error hidden"></div>
   </div>
   <script src="popup.js"></script>
 </body>

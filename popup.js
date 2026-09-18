@@ -2799,6 +2799,11 @@ const typeSelect = document.getElementById('type-select');
 const outputSection = document.getElementById('output-section');
 const outputPre = document.getElementById('output');
 const errorMsg = document.getElementById('error-msg');
+const pageInfoBtn = document.getElementById('page-info-btn');
+const pageInfoSection = document.getElementById('page-info-section');
+const pageInfoOutput = document.getElementById('page-info-output');
+const pageInfoCopyBtn = document.getElementById('page-info-copy-btn');
+const pageInfoError = document.getElementById('page-info-error');
 
 let takeHalf = false;
 halfBtn.addEventListener('click', () => {
@@ -2851,8 +2856,15 @@ kidsBtn.addEventListener('click', () => {
 
 let lastParsedSizes = null;
 let lastParsedType = null;
+// Captured by "Get info from page" (on the live product page tab) and later
+// merged in by "Send to page" (on the admin tool tab) — the two run on
+// different tabs, so this is how the result crosses from one to the other.
+let lastPageInfo = null;
 
-parseBtn.addEventListener('click', () => {
+// Shared by the Parse button and "Get info from page" (which auto-fills the
+// textarea with scraped size text, then parses it immediately rather than
+// waiting for a separate manual click).
+function runParse() {
   const raw = inputText.value.trim();
   const type = typeSelect.value;
 
@@ -2887,7 +2899,9 @@ parseBtn.addEventListener('click', () => {
   if (errors.length) {
     showError(errors.join('\n'));
   }
-});
+}
+
+parseBtn.addEventListener('click', runParse);
 
 typeSelect.addEventListener('change', saveState);
 
@@ -2915,7 +2929,11 @@ copyBtn.addEventListener('click', copyOutputToClipboard);
 // in the popup's context — must be self-contained, no closures over popup.js.
 // Merges { sizes, type } into the page's EXISTING product JSON rather than
 // replacing the whole field, so name/brand/product_image/etc. survive.
-async function fillJsonEditorInPage(sizes, type) {
+// pageInfo (from "Get info from page" on the live product page tab, earlier
+// in the same session) fills name/product_image/brand/gender ONLY where the
+// admin tool's own value is still empty — never overwrites one someone
+// already corrected by hand, unlike sizes/type above which always win.
+async function fillJsonEditorInPage(sizes, type, pageInfo) {
   const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
   const simulateClick = (el) => {
     const opts = { bubbles: true, cancelable: true, view: window };
@@ -2948,6 +2966,11 @@ async function fillJsonEditorInPage(sizes, type) {
 
   existing.sizes = sizes;
   existing.type = type;
+  if (pageInfo) {
+    for (const key of ['name', 'product_image', 'brand', 'gender']) {
+      if (!existing[key] && pageInfo[key]) existing[key] = pageInfo[key];
+    }
+  }
   // additional_info holds a derived (e.g. x10-scaled) copy of sizes/type that the
   // page regenerates itself once Update is clicked — clear it out rather than
   // trying to recompute it here, so it doesn't go stale against the new sizes.
@@ -2985,7 +3008,7 @@ sendBtn.addEventListener('click', async () => {
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func: fillJsonEditorInPage,
-      args: [lastParsedSizes, lastParsedType],
+      args: [lastParsedSizes, lastParsedType, lastPageInfo],
     });
     if (result && result.ok) {
       if (result.updated) {
@@ -3016,6 +3039,203 @@ function showError(msg) {
   errorMsg.classList.remove('hidden');
 }
 
+function showPageInfoError(msg) {
+  pageInfoError.textContent = msg;
+  pageInfoError.classList.remove('hidden');
+}
+
+// Runs inside the active tab's page (via chrome.scripting.executeScript), not
+// in the popup's context — must be self-contained, no closures over popup.js.
+// Extracts product name/image/brand/gender for a page whose own automated
+// scraper (a separate admin tool, not this extension) came back with those
+// fields null. Layered fallbacks, roughly most-to-least reliable:
+//   1. JSON-LD Product schema — most e-commerce platforms (including
+//      Salesforce Commerce Cloud storefronts, which this site runs on)
+//      include this for SEO, and it's structured data rather than a guess.
+//   2. Open Graph / Twitter Card meta tags.
+//   3. Bottega Veneta's own page structure — best-effort selectors based on
+//      the visible page and the Kering DAM CDN image URL pattern
+//      (bottega-veneta.dam.kering.com) confirmed from an actual example on
+//      this site; these are NOT verified against the live DOM (this tool
+//      couldn't fetch the page directly — it's behind bot protection) and
+//      may need adjusting once tried against the real page.
+// Gender has no structured-data equivalent here, so it's breadcrumb/keyword
+// based and the least reliable of the four — left null rather than guessed
+// when nothing matches.
+async function extractPageInfo() {
+  const result = { name: null, product_image: null, brand: null, gender: null, size_text: null };
+
+  const ldScripts = [...document.querySelectorAll('script[type="application/ld+json"]')];
+  for (const script of ldScripts) {
+    let data;
+    try { data = JSON.parse(script.textContent); } catch (e) { continue; }
+    const candidates = Array.isArray(data) ? data : (data['@graph'] || [data]);
+    const product = candidates.find(c => {
+      const t = c && c['@type'];
+      return t === 'Product' || (Array.isArray(t) && t.includes('Product'));
+    });
+    if (product) {
+      if (!result.name && product.name) result.name = product.name;
+      if (!result.product_image && product.image) {
+        result.product_image = Array.isArray(product.image) ? product.image[0] : product.image;
+      }
+      if (!result.brand && product.brand) {
+        result.brand = typeof product.brand === 'string' ? product.brand : product.brand.name;
+      }
+      break;
+    }
+  }
+
+  const meta = (prop) => document.querySelector(`meta[property="${prop}"]`)?.content
+    ?? document.querySelector(`meta[name="${prop}"]`)?.content ?? null;
+  if (!result.name) result.name = meta('og:title') || meta('twitter:title');
+  if (!result.product_image) result.product_image = meta('og:image') || meta('twitter:image');
+  if (!result.brand) result.brand = meta('product:brand') || meta('og:site_name');
+
+  if (!result.name) {
+    const nameEl = document.querySelector(
+      'h1.product-name, h1[class*="product-name"], .pdp-title, [data-testid="product-name"], h1'
+    );
+    if (nameEl) result.name = nameEl.textContent.trim();
+  }
+  // Whatever layer above supplied it, the name can come back as a templated
+  // accessibility-style phrase — "{Product} 에 대한 {Gender} 에 {Color}" (i.e.
+  // "{Product} for {Gender} in {Color}"), seen from an actual page on this
+  // site — rather than the bare product name. Keep only the part before "에
+  // 대한" ("for"), which is where the gender/color qualifier starts.
+  if (result.name) {
+    const bare = result.name.split(/\s*에\s*대한\s*/)[0].trim();
+    if (bare) result.name = bare;
+  }
+  if (!result.product_image) {
+    const imgEl = document.querySelector(
+      'img[src*="dam.kering.com"], .primary-image img, .pdp-image img, [data-testid="product-image"] img, .product-images img'
+    );
+    if (imgEl) result.product_image = imgEl.currentSrc || imgEl.src;
+  }
+  if (!result.brand) {
+    const logoEl = document.querySelector('header a[href="/"], .header-logo, [class*="logo"] a, [aria-label*="home" i]');
+    result.brand = logoEl?.getAttribute('aria-label') || logoEl?.textContent?.trim() || null;
+  }
+  // The admin tool's own brand field is a snake_case slug (e.g.
+  // "bottega_veneta_korea" as the store name), not a display name — whatever
+  // source supplied it above ("Bottega Veneta"), normalize to match.
+  if (result.brand) {
+    result.brand = result.brand.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  }
+
+  const genderKeywords = [['여성', 'female'], ['남성', 'male'], ['남녀공용', 'unisex'], ['유니섹스', 'unisex']];
+  const breadcrumbEls = [...document.querySelectorAll(
+    '[class*="breadcrumb"] a, [class*="breadcrumb"] span, nav[aria-label*="breadcrumb" i] a'
+  )];
+  for (const el of breadcrumbEls) {
+    const text = el.textContent.trim();
+    const match = genderKeywords.find(([kw]) => text === kw || text.includes(kw));
+    if (match) { result.gender = match[1]; break; }
+  }
+
+  // Sizes are hidden behind two nested modals on this page (상품정보 →
+  // 사이즈 가이드). Matched by visible TEXT rather than a CSS selector — the
+  // exact label ("상품정보"/"사이즈 가이드") is confirmed from the actual page,
+  // while class names aren't (this tool couldn't fetch the live page to
+  // verify them), so text is the more reliable signal here. Prefers the
+  // smallest matching element, so a big wrapping container whose text
+  // happens to also include the label isn't clicked instead of the actual
+  // button/link.
+  const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+  const simulateClick = (el) => {
+    const opts = { bubbles: true, cancelable: true, view: window };
+    el.dispatchEvent(new MouseEvent('mousedown', opts));
+    el.dispatchEvent(new MouseEvent('mouseup', opts));
+    el.dispatchEvent(new MouseEvent('click', opts));
+  };
+  const findClickableByText = (text) => {
+    const all = [...document.querySelectorAll('button, a, [role="button"], [onclick], summary, div, span')];
+    const exact = all.filter(el => el.textContent.trim() === text);
+    const pool = exact.length > 0 ? exact : all.filter(el => el.textContent.includes(text));
+    return pool.length > 0 ? pool.reduce((a, b) => (a.textContent.length <= b.textContent.length ? a : b)) : null;
+  };
+
+  const infoBtn = findClickableByText('상품정보');
+  if (infoBtn) {
+    simulateClick(infoBtn);
+    await wait(400);
+    const guideBtn = findClickableByText('사이즈 가이드');
+    if (guideBtn) {
+      simulateClick(guideBtn);
+      await wait(400);
+      // Find the bullet containing "세로" (the first dimension in this
+      // sheet's format), then walk up until the container also includes
+      // "가로" and "폭" — the whole size list, not just that one line. Picks
+      // the shortest (most specific) matching element rather than requiring
+      // a leaf node with no children — a bullet like "세로: <b>15cm</b>"
+      // has a child element, so a leaf-only check would never match it.
+      const seoroCandidates = [...document.querySelectorAll('body *')].filter(el => el.textContent.includes('세로'));
+      const seoroEl = seoroCandidates.length > 0
+        ? seoroCandidates.reduce((a, b) => (a.textContent.length <= b.textContent.length ? a : b))
+        : null;
+      if (seoroEl) {
+        let container = seoroEl;
+        for (let i = 0; i < 10 && !(container.textContent.includes('가로') && container.textContent.includes('폭')); i++) {
+          if (!container.parentElement) break;
+          container = container.parentElement;
+        }
+        result.size_text = container.innerText.trim();
+      }
+    }
+  }
+
+  return result;
+}
+
+pageInfoBtn.addEventListener('click', async () => {
+  pageInfoError.classList.add('hidden');
+  pageInfoSection.classList.add('hidden');
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: extractPageInfo,
+    });
+    pageInfoOutput.textContent = JSON.stringify(result, null, 2);
+    pageInfoSection.classList.remove('hidden');
+    // Kept for "Send to page" to merge into the admin tool's JSON once you
+    // switch to that tab — this tab (the live product page) and that one are
+    // never the active tab at the same time.
+    lastPageInfo = { name: result.name, product_image: result.product_image, brand: result.brand, gender: result.gender };
+    // Size text (once the page's own modals are clicked open) goes straight
+    // into the measurement textarea, ready for Parse — same bullet-list
+    // format ("세로:"/"가로:"/"폭:") this tool already handles. Parse it
+    // immediately rather than waiting for a separate manual click — the
+    // main JSON output section fills in with its own Copy/Send to page.
+    if (result.size_text) {
+      inputText.value = result.size_text;
+      runParse();
+    }
+    saveState();
+    const missing = Object.entries(result).filter(([, v]) => !v).map(([k]) => k);
+    if (missing.length) {
+      showPageInfoError(`Couldn't find: ${missing.join(', ')}. Selectors may need adjusting for this page — inspect the element and let me know what to match.`);
+    }
+  } catch (e) {
+    console.error('Get info from page failed:', e);
+    showPageInfoError(`Get info from page failed: ${e.message}`);
+  }
+});
+
+function copyPageInfoToClipboard() {
+  navigator.clipboard.writeText(pageInfoOutput.textContent).then(() => {
+    pageInfoCopyBtn.textContent = 'Copied!';
+    pageInfoCopyBtn.classList.add('copied');
+    setTimeout(() => {
+      pageInfoCopyBtn.textContent = 'Copy';
+      pageInfoCopyBtn.classList.remove('copied');
+    }, 1500);
+  });
+}
+
+pageInfoCopyBtn.addEventListener('click', copyPageInfoToClipboard);
+
 // Chrome tears down the popup's entire JS context every time it closes — which
 // happens on any loss of focus (clicking the page, switching tabs, clicking
 // "edit" yourself before Send to page). Without persisting state, that wipes
@@ -3035,8 +3255,11 @@ function saveState() {
       kidsMode,
       lastParsedSizes,
       lastParsedType,
+      lastPageInfo,
       outputText: outputPre.textContent,
       outputVisible: !outputSection.classList.contains('hidden'),
+      pageInfoOutputText: pageInfoOutput.textContent,
+      pageInfoOutputVisible: !pageInfoSection.classList.contains('hidden'),
     },
   });
 }
@@ -3063,10 +3286,15 @@ async function restoreState() {
 
   lastParsedSizes = s.lastParsedSizes ?? null;
   lastParsedType = s.lastParsedType ?? null;
+  lastPageInfo = s.lastPageInfo ?? null;
 
   if (s.outputText) {
     outputPre.textContent = s.outputText;
     if (s.outputVisible) outputSection.classList.remove('hidden');
+  }
+  if (s.pageInfoOutputText) {
+    pageInfoOutput.textContent = s.pageInfoOutputText;
+    if (s.pageInfoOutputVisible) pageInfoSection.classList.remove('hidden');
   }
 }
 
