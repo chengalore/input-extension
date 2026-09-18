@@ -19,6 +19,19 @@ body {
   gap: 6px;
 }
 
+/* A flex item's default min-width is its content's intrinsic width, not 0 —
+   so an unbroken long string (e.g. a full image URL in the JSON output)
+   forces the whole popup wider no matter what min-width is set on body,
+   since that's only a floor. Reset it on every flex item in this chain
+   (.container itself, and #output-section/#page-info-section which are
+   flex columns in their own right, nesting the <pre> blocks) so overflow
+   inside a <pre> scrolls in place instead of stretching the popup. */
+.container > *,
+#output-section > *,
+#page-info-section > * {
+  min-width: 0;
+}
+
 h1 {
   font-size: 12px;
   font-weight: 600;
