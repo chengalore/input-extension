@@ -612,6 +612,104 @@ function tryParseSplitLabelTable(rawText, type, takeHalf) {
   return { sizes: expandInseamCombinations(sizes), errors };
 }
 
+// ─── Wrapped-header linearized table parser ──────────────────────────────────
+// A copy-paste artifact where the header row's own cells are tab-separated
+// (unlike a fully linearized table, which has none), but one header cell's
+// qualifier text pushed the REMAINING header cells onto a continuation line,
+// e.g. "size\tHeight\tShoulder width\n(distance between shoulder seams)\t
+// Body width\tSleeve length" — "Shoulder width" and its qualifier are one
+// field, wrapped across the tab/newline boundary, with "Body width"/"Sleeve
+// length" continuing the SAME logical header row on the next line. The data
+// that follows is then fully linearized (one value per line, no tabs at
+// all) in row-major order (label, then one value per column, repeated per
+// size) — the same shape isLinearizedTableFormat handles, except that
+// detector requires zero tabs anywhere in the whole text and rejects this
+// outright because of the wrapped header.
+function tryParseWrappedHeaderLinearTable(rawText, type, takeHalf) {
+  const lines = rawText.split('\n').map(l => l.trim()).filter(l => l !== '');
+  let headerLineCount = 0;
+  while (headerLineCount < lines.length && lines[headerLineCount].includes('\t')) headerLineCount++;
+  // Only for the wrapped case — a single tab-separated header line already
+  // has a working path elsewhere in this file.
+  if (headerLineCount < 2) return null;
+
+  const colMap = TOPS_TYPES.has(type) ? TOPS_COLUMN_MAP
+               : PANTS_TYPES.has(type) ? PANTS_COLUMN_MAP
+               : BAG_COLUMN_MAP;
+  const fieldForHeader = (h) => {
+    const stripped = h.replace(/^(?:[(（][^)）]+[)）]|\[[^\]]+\])\s*/, '').replace(/\s*[(（][^)）]+[)）]$/, '').trim().toLowerCase();
+    return matchGradedField(h, '', type) ?? colMap[h.toLowerCase()] ?? colMap[stripped];
+  };
+
+  // Merge the wrapped header lines into one flat cell list — a cell that
+  // isn't itself a recognized field and starts with an opening paren (a
+  // qualifier fragment, not a fresh field name) continues the previous cell
+  // instead of starting a new one.
+  const headerCells = [];
+  for (let i = 0; i < headerLineCount; i++) {
+    for (const cell of lines[i].split('\t').map(c => c.trim()).filter(Boolean)) {
+      const continuesPrevious = /^[(（]/.test(cell) && !fieldForHeader(cell) && headerCells.length > 0;
+      if (continuesPrevious) headerCells[headerCells.length - 1] += ` ${cell}`;
+      else headerCells.push(cell);
+    }
+  }
+  if (headerCells.length < 2) return null;
+
+  const indexToField = {};
+  for (let i = 1; i < headerCells.length; i++) {
+    const field = fieldForHeader(headerCells[i]);
+    if (field) indexToField[i] = field;
+  }
+  if (Object.keys(indexToField).length === 0) return null;
+
+  const numCols = headerCells.length;
+  const dataLines = lines.slice(headerLineCount);
+  if (dataLines.length === 0 || dataLines.length % numCols !== 0) return null;
+
+  const sizes = {};
+  const errors = [];
+  for (let i = 0; i < dataLines.length; i += numCols) {
+    const row = dataLines.slice(i, i + numCols);
+    const sizeLabel = normalizeLabel(row[0]);
+    if (!sizeLabel) continue;
+
+    const measurements = {};
+    for (const [idxStr, field] of Object.entries(indexToField)) {
+      const nums = extractNumbers(row[Number(idxStr)] ?? '');
+      if (nums.length === 0 || field in measurements) continue;
+      measurements[field] = nums[0];
+    }
+
+    for (const key of WAIST_PRIORITY) { if (key in measurements) { measurements.waist = measurements[key]; break; } }
+    for (const key of WAIST_PRIORITY) delete measurements[key];
+
+    for (const key of HIP_PRIORITY) { if (key in measurements) { measurements.hip = measurements[key]; break; } }
+    for (const key of HIP_PRIORITY) delete measurements[key];
+
+    normalizeMeasurements(measurements, takeHalf);
+
+    const wb = measurements._waistband ?? 0;
+    delete measurements._waistband;
+    if ('frontRise$incl' in measurements) measurements.frontRise = measurements['frontRise$incl'];
+    else if ('frontRise$excl' in measurements) measurements.frontRise = measurements['frontRise$excl'] + wb;
+    if ('backRise$incl' in measurements) measurements.backRise = measurements['backRise$incl'];
+    else if ('backRise$excl' in measurements) measurements.backRise = measurements['backRise$excl'] + wb;
+    for (const key of RISE_TAGS) delete measurements[key];
+
+    for (const key of HEIGHT_PRIORITY) { if (key in measurements) { measurements.height = measurements[key]; break; } }
+    for (const key of HEIGHT_PRIORITY) delete measurements[key];
+
+    computeSleeve(measurements);
+    if (Object.keys(measurements).length === 0) continue;
+    const missing = TYPE_CONFIG[type].required.filter(k => !(k in measurements));
+    if (missing.length) errors.push(`"${sizeLabel}" is missing required fields: ${missing.join(', ')}`);
+    sizes[sizeLabel] = measurements;
+  }
+
+  if (Object.keys(sizes).length === 0) return null;
+  return { sizes: expandInseamCombinations(sizes), errors };
+}
+
 // ─── POM spec-sheet parser ───────────────────────────────────────────────────
 // "POM" (Point of Measure) sheets: col 0 = measurement description,
 // cols 1-N = one value per size. The header row has "POM" as col 0,
@@ -905,6 +1003,12 @@ function parseTabular(rawText, type, takeHalf) {
   // a rendered-web-table copy-paste artifact
   const splitLabelResult = tryParseSplitLabelTable(rawText, type, takeHalf);
   if (splitLabelResult) return splitLabelResult;
+
+  // Wrapped-header linearized table: header row's own cells span 2+
+  // tab-separated lines (a qualifier pushed later header cells down),
+  // followed by fully linearized (one value per line) data
+  const wrappedHeaderResult = tryParseWrappedHeaderLinearTable(rawText, type, takeHalf);
+  if (wrappedHeaderResult) return wrappedHeaderResult;
 
   // Reconvert TSV rows to tab-joined lines for the rest of the logic.
   // Don't trim — preserves leading tabs that mark an empty size-column header.
