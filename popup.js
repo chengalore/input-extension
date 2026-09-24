@@ -629,9 +629,7 @@ function tryParseWrappedHeaderLinearTable(rawText, type, takeHalf) {
   const lines = rawText.split('\n').map(l => l.trim()).filter(l => l !== '');
   let headerLineCount = 0;
   while (headerLineCount < lines.length && lines[headerLineCount].includes('\t')) headerLineCount++;
-  // Only for the wrapped case — a single tab-separated header line already
-  // has a working path elsewhere in this file.
-  if (headerLineCount < 2) return null;
+  if (headerLineCount < 1) return null;
 
   const colMap = TOPS_TYPES.has(type) ? TOPS_COLUMN_MAP
                : PANTS_TYPES.has(type) ? PANTS_COLUMN_MAP
@@ -664,17 +662,33 @@ function tryParseWrappedHeaderLinearTable(rawText, type, takeHalf) {
 
   const numCols = headerCells.length;
   const dataLines = lines.slice(headerLineCount);
-  if (dataLines.length === 0 || dataLines.length % numCols !== 0) return null;
+  // Ordinary tab-per-row tables (header + data both tab-separated) already
+  // have a working path elsewhere — this parser is only for genuinely
+  // linearized data (one bare value per line). A single header line whose
+  // "data" is actually still tab-rows would otherwise get misread as N
+  // separate one-value lines, so bail instead.
+  if (dataLines.length === 0 || dataLines.some(l => l.includes('\t')) || dataLines.length % numCols !== 0) return null;
+
+  // A size-code number in column 0 paired with a slash-separated list of
+  // inseam options in the inseam column (e.g. "73 / 76 / 85") means this one
+  // row is actually several sizes sharing every other measurement — one per
+  // inseam option — named "W{code}L{inseam}" instead of the plain column-0
+  // label (the classic jeans W/L waist-length sizing convention).
+  const inseamIdx = Object.entries(indexToField).find(([, f]) => f === 'inseam')?.[0];
 
   const sizes = {};
   const errors = [];
   for (let i = 0; i < dataLines.length; i += numCols) {
     const row = dataLines.slice(i, i + numCols);
-    const sizeLabel = normalizeLabel(row[0]);
-    if (!sizeLabel) continue;
+
+    const inseamRaw = inseamIdx !== undefined ? (row[Number(inseamIdx)] ?? '') : '';
+    const inseamOptions = inseamRaw.includes('/')
+      ? inseamRaw.split('/').map(s => s.trim()).filter(Boolean)
+      : null;
 
     const measurements = {};
     for (const [idxStr, field] of Object.entries(indexToField)) {
+      if (field === 'inseam' && inseamOptions) continue; // filled per-variant below
       const nums = extractNumbers(row[Number(idxStr)] ?? '');
       if (nums.length === 0 || field in measurements) continue;
       measurements[field] = nums[0];
@@ -700,7 +714,24 @@ function tryParseWrappedHeaderLinearTable(rawText, type, takeHalf) {
     for (const key of HEIGHT_PRIORITY) delete measurements[key];
 
     computeSleeve(measurements);
-    if (Object.keys(measurements).length === 0) continue;
+
+    if (inseamOptions) {
+      const code = extractNumbers(row[0] ?? '')[0];
+      if (code === undefined) continue;
+      for (const opt of inseamOptions) {
+        const inseamVal = extractNumbers(opt)[0];
+        if (inseamVal === undefined) continue;
+        const label = `W${code}L${inseamVal}`;
+        const m = { ...measurements, inseam: inseamVal };
+        const missing = TYPE_CONFIG[type].required.filter(k => !(k in m));
+        if (missing.length) errors.push(`"${label}" is missing required fields: ${missing.join(', ')}`);
+        sizes[label] = m;
+      }
+      continue;
+    }
+
+    const sizeLabel = normalizeLabel(row[0]);
+    if (!sizeLabel || Object.keys(measurements).length === 0) continue;
     const missing = TYPE_CONFIG[type].required.filter(k => !(k in measurements));
     if (missing.length) errors.push(`"${sizeLabel}" is missing required fields: ${missing.join(', ')}`);
     sizes[sizeLabel] = measurements;
@@ -944,10 +975,19 @@ const TEXT_NUMS = {
   twenty:20,thirty:30,forty:40,fifty:50,sixty:60,seventy:70,eighty:80,ninety:90,
 };
 
+const TEXT_NUMS_TENS = new Set(['twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety']);
+
 function parseTextNumber(str) {
   const words = str.trim().toLowerCase().split(/[\s-]+/);
   if (words.length === 0 || words.some(w => !(w in TEXT_NUMS))) return null;
-  return words.reduce((sum, w) => sum + TEXT_NUMS[w], 0) || null;
+  if (words.length === 1) return TEXT_NUMS[words[0]] || null;
+  // A genuine compound ("twenty three" = 20 + 3) always leads with a tens
+  // word. Otherwise each word is spelling out one digit in sequence
+  // ("one two three" = 123, not 1 + 2 + 3 = 6) — e.g. a size code read
+  // aloud digit-by-digit rather than as a single number.
+  if (TEXT_NUMS_TENS.has(words[0])) return words.reduce((sum, w) => sum + TEXT_NUMS[w], 0) || null;
+  if (words.every(w => TEXT_NUMS[w] < 10)) return parseInt(words.map(w => TEXT_NUMS[w]).join(''), 10);
+  return null;
 }
 
 function extractNumbers(str) {
