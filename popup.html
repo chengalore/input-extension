@@ -40,14 +40,16 @@
     </div>
 
     <div class="toggle-grid">
-      <button id="half-btn" class="toggle-btn">Take half</button>
-      <button id="yuki-btn" class="toggle-btn">Yuki = arm</button>
-      <button id="sleeve-btn" class="toggle-btn">Sleeve = arm</button>
-      <button id="table-btn" class="toggle-btn">Table output</button>
+      <button id="half-btn" class="toggle-btn" title="Halve bust/waist/hem/hip/thigh/knee/ankle opening (original kept as _round)">Take half</button>
+      <button id="yuki-btn" class="toggle-btn" title="Parse Yuki (ゆき) as full sleeve instead of sleeve_length">Yuki = arm</button>
+      <button id="sleeve-btn" class="toggle-btn" title="Parse &quot;sleeve length&quot;/袖丈/소매길이 as full sleeve instead of sleeve_length">Sleeve = arm</button>
+      <button id="table-btn" class="toggle-btn" title="Switch output between JSON and a tab-separated table">Table output</button>
       <button id="kids-btn" class="toggle-btn" title="Mock missing required fields">Kids</button>
+      <button id="leggings-btn" class="toggle-btn" title="Send to page also sets attributes.pants_style = &quot;leggings&quot;">Leggings</button>
     </div>
 
     <button id="parse-btn">Parse</button>
+    <button id="load-from-page-btn" class="secondary-btn" title="Read the page's existing sizes/type JSON into the output below">Load sizes from page</button>
 
     <div id="output-section" class="hidden">
       <div class="output-header">
@@ -57,6 +59,13 @@
           <button id="send-btn" class="copy-btn">Send to page</button>
         </div>
       </div>
+      <div class="fix-actions">
+        <button id="fix-sleeve-btn" class="copy-btn" title="For every size: sleeve_length = current sleeve, then sleeve = shoulder/2 + sleeve_length">sleeve → sleeve_length</button>
+        <button id="fix-hem-btn" class="copy-btn" title="For every size: hem = hem / 2 (original kept as hem_round)">Half hem</button>
+        <button id="fix-hip-btn" class="copy-btn" title="For every size: hip = hip × 2 (undoes an incorrect halving), and removes the now-stale hip_round">Double hip</button>
+        <button id="fix-thigh-btn" class="copy-btn" title="For every size: thigh = thigh × 2 (undoes an incorrect halving), and removes the now-stale thigh_round">Double thigh</button>
+        <button id="fix-waist-btn" class="copy-btn" title="For every size: waist = waist × 2 (undoes an incorrect halving), and removes the now-stale waist_round">Double waist</button>
+      </div>
       <pre id="output" class="output-compact"></pre>
     </div>
 
@@ -64,7 +73,7 @@
 
     <hr class="divider" />
 
-    <button id="page-info-btn">Get info from page</button>
+    <button id="page-info-btn" title="Scrape name/image/brand/gender (and size chart, if a modal is found) from this product page">Get info from page</button>
 
     <div id="page-info-section" class="hidden">
       <div class="output-header">

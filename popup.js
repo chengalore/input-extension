@@ -991,7 +991,11 @@ function parseTextNumber(str) {
 }
 
 function extractNumbers(str) {
-  const digits = [...str.matchAll(/[\d.]+/g)].map(m => parseFloat(m[0]));
+  // Requires at least one actual digit in each match — "[\d.]+" alone would
+  // also match a bare "." with no digits (e.g. the one in "Approx.") as its
+  // own token, parsing to NaN and silently corrupting whichever value came
+  // after it in the result array.
+  const digits = [...str.matchAll(/\d*\.?\d+/g)].map(m => parseFloat(m[0]));
   if (digits.length > 0) return digits;
   const t = parseTextNumber(str);
   return t !== null ? [t] : [];
@@ -1791,6 +1795,15 @@ function parseSingleLine(rawText, type, takeHalf) {
   // rest of the pipeline splits on "/" as a generic segment separator, which
   // would otherwise treat num1 and num2 as unrelated fragments.
   rawText = rawText.replace(/([:：]\s*)\d+\.?\d*\s*\/\s*(\d+\.?\d*)/g, '$1$2');
+
+  // A "/" is a segment separator everywhere below, but a parenthetical
+  // qualifier can legitimately contain one — e.g. "Bust (including
+  // tucks/gathers) 95cm" — which would otherwise get severed into "Bust
+  // (including tucks" (no number) and "gathers) 95cm" (no recognized field
+  // name), losing the measurement entirely. The qualifier text itself is
+  // discarded during field extraction regardless, so it's safe to just
+  // neutralize any "/" inside parens rather than restore it afterward.
+  rawText = rawText.replace(/[(（][^)）]*[)）]/g, m => m.replace(/\//g, '\u0000'));
 
   const lines = joinWrappedLabelLines(joinContinuationLines(rawText).filter(l => l.trim()), colMap);
   const sizes = {};
@@ -2877,9 +2890,119 @@ function convertHtmlTable(rawText) {
   return rows.join('\n');
 }
 
+// "Size: S/M/L" then "Waist circumference: Approx. 55 (approx. 136 when
+// stretched to the maximum) / Approx. 59 (...) / Approx. 63 (...)" — one
+// header line declares the size labels, and every field line afterward gives
+// one slash-separated value per label, in the same order. Unlike the
+// "Field: num1/num2" collapse in parseSingleLine (a single field's two
+// readings for ONE size), here each slash-separated slot is a DIFFERENT
+// size, and a slot's own value can itself carry a parenthetical second
+// reading (e.g. stretched-to-max) — the first number in each slot is always
+// the plain/relaxed one wanted, so no special-casing is needed beyond taking
+// extractNumbers(...)[0] per slot.
+function tryParseSlashSeparatedSizeList(rawText, type, takeHalf) {
+  if (!TOPS_TYPES.has(type) && !PANTS_TYPES.has(type)) return null;
+  const colMap = TOPS_TYPES.has(type) ? TOPS_COLUMN_MAP : PANTS_COLUMN_MAP;
+
+  const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
+  const sizeLineIdx = lines.findIndex(l => /^size\s*[:：]/i.test(l));
+  if (sizeLineIdx < 0) return null;
+
+  const sizeLabels = lines[sizeLineIdx].replace(/^size\s*[:：]\s*/i, '').split('/').map(s => s.trim()).filter(Boolean);
+  if (sizeLabels.length < 2) return null;
+
+  const sizes = {};
+  for (const label of sizeLabels) sizes[label] = {};
+
+  for (let i = 0; i < lines.length; i++) {
+    if (i === sizeLineIdx) continue;
+    const line = lines[i];
+    const colonIdx = line.search(/[:：]/);
+    if (colonIdx < 0) continue;
+
+    const fieldName = line.slice(0, colonIdx).trim().toLowerCase();
+    const field = colMap[fieldName] ?? colMap[fieldName.replace(/\s*circumference\s*$/i, '')];
+    if (!field) continue;
+
+    const values = line.slice(colonIdx + 1).split('/').map(s => s.trim()).filter(Boolean);
+    if (values.length !== sizeLabels.length) continue; // doesn't align to the declared sizes — skip
+
+    values.forEach((v, vi) => {
+      const nums = extractNumbers(v);
+      if (nums.length === 0) return;
+      const target = sizes[sizeLabels[vi]];
+      if (!(field in target)) target[field] = nums[0];
+    });
+  }
+
+  const errors = [];
+  for (const [label, measurements] of Object.entries(sizes)) {
+    if (Object.keys(measurements).length === 0) { delete sizes[label]; continue; }
+    normalizeMeasurements(measurements, takeHalf);
+    computeSleeve(measurements);
+    const missing = TYPE_CONFIG[type].required.filter(k => !(k in measurements));
+    if (missing.length) errors.push(`"${label}" is missing required fields: ${missing.join(', ')}`);
+  }
+
+  if (Object.keys(sizes).length === 0) return null;
+  return { sizes, errors };
+}
+
+// "Size S Length: approx. 58 Shoulder width: approx. 33.5 ... Size M Length:
+// approx. 59.5 ..." — a size guide copied from a page where every size's
+// fields run together in one continuous stream (line wraps mid-sentence, no
+// blank line or delimiter between one size's fields and the next "Size X"
+// marker). The normal line-by-line pipeline reads it as tab-free single
+// lines and, mid-blob, a mangled multi-field line becomes its own bogus size
+// label; "extractKnownFieldPairs" run over the whole blob would also collapse
+// every size's fields into one bucket (first match per field wins). Splitting
+// on every "Size <code>" marker first, then running the field-pair scan
+// within each resulting slice, keeps each size's fields separate regardless
+// of the original line breaks.
+function tryParseInlineSizeStream(rawText, type, takeHalf) {
+  if (!TOPS_TYPES.has(type) && !PANTS_TYPES.has(type)) return null;
+  const colMap = TOPS_TYPES.has(type) ? TOPS_COLUMN_MAP : PANTS_COLUMN_MAP;
+
+  const marker = /\bSize\s+([A-Za-z0-9]{1,4})\b/g;
+  const matches = [...rawText.matchAll(marker)];
+  if (matches.length < 2) return null;
+
+  const sizes = {};
+  const errors = [];
+  for (let i = 0; i < matches.length; i++) {
+    const label = matches[i][1];
+    const start = matches[i].index + matches[i][0].length;
+    const end = i + 1 < matches.length ? matches[i + 1].index : rawText.length;
+    let chunk = rawText.slice(start, end);
+
+    // "Length: Front approx. 60.5 Back approx. 67" — a field given as two
+    // qualified readings instead of one bare number. Collapse to the front
+    // value only, matching this codebase's front-over-back priority for
+    // garment length elsewhere (HEIGHT_PRIORITY prefers cf over cb), so the
+    // plain "Field: [approx.] NUM" pattern below still matches it.
+    chunk = chunk.replace(/:\s*Front\s*(approx\.?\s*\d+\.?\d*)\s*Back\s*approx\.?\s*\d+\.?\d*/gi, ': $1');
+
+    const measurements = extractKnownFieldPairs(chunk, colMap);
+    if (Object.keys(measurements).length === 0) return null; // not actually this format
+
+    normalizeMeasurements(measurements, takeHalf);
+    computeSleeve(measurements);
+    const missing = TYPE_CONFIG[type].required.filter(k => !(k in measurements));
+    if (missing.length) errors.push(`"${label}" is missing required fields: ${missing.join(', ')}`);
+    sizes[label] = measurements;
+  }
+
+  if (Object.keys(sizes).length === 0) return null;
+  return { sizes, errors };
+}
+
 function parseInternal(rawText, type, takeHalf) {
   if (isHtmlTableFormat(rawText)) rawText = convertHtmlTable(rawText);
   if (isMarkdownTableFormat(rawText)) rawText = convertMarkdownTable(rawText);
+  const inlineSizeStreamResult = tryParseInlineSizeStream(rawText, type, takeHalf);
+  if (inlineSizeStreamResult) return inlineSizeStreamResult;
+  const slashSeparatedSizeListResult = tryParseSlashSeparatedSizeList(rawText, type, takeHalf);
+  if (slashSeparatedSizeListResult) return slashSeparatedSizeListResult;
   // POM spec-sheet and Dim/Ref/Code tech-pack sheets: route to parseTabular before
   // isGradedFormat intercepts (it matches "POM code\t", "Dim\t", "Ref\t", "Code\t").
   // Distinguish tech-pack from graded by the presence of size labels — numeric
@@ -2936,8 +3059,15 @@ const yukiBtn   = document.getElementById('yuki-btn');
 const sleeveBtn = document.getElementById('sleeve-btn');
 const tableBtn  = document.getElementById('table-btn');
 const kidsBtn   = document.getElementById('kids-btn');
+const leggingsBtn = document.getElementById('leggings-btn');
 const copyBtn   = document.getElementById('copy-btn');
+const fixSleeveBtn = document.getElementById('fix-sleeve-btn');
+const fixHemBtn = document.getElementById('fix-hem-btn');
+const fixHipBtn = document.getElementById('fix-hip-btn');
+const fixThighBtn = document.getElementById('fix-thigh-btn');
+const fixWaistBtn = document.getElementById('fix-waist-btn');
 const sendBtn   = document.getElementById('send-btn');
+const loadFromPageBtn = document.getElementById('load-from-page-btn');
 const inputText = document.getElementById('input-text');
 const typeSelect = document.getElementById('type-select');
 const outputSection = document.getElementById('output-section');
@@ -2995,6 +3125,13 @@ let kidsMode = false;
 kidsBtn.addEventListener('click', () => {
   kidsMode = !kidsMode;
   kidsBtn.classList.toggle('active', kidsMode);
+  saveState();
+});
+
+let leggingsMode = false;
+leggingsBtn.addEventListener('click', () => {
+  leggingsMode = !leggingsMode;
+  leggingsBtn.classList.toggle('active', leggingsMode);
   saveState();
 });
 
@@ -3069,6 +3206,122 @@ function copyOutputToClipboard() {
 
 copyBtn.addEventListener('click', copyOutputToClipboard);
 
+function flashFixSleeveBtn(label) {
+  fixSleeveBtn.textContent = label;
+  setTimeout(() => { fixSleeveBtn.textContent = 'sleeve → sleeve_length'; }, 1500);
+}
+
+// One-shot bulk correction for data loaded from the page where "sleeve" was
+// entered as just the raw sleeve_length (missing the shoulder/2 contribution),
+// making every size's sleeve too short. Reinterprets the current sleeve value
+// as sleeve_length and recomputes sleeve from it, across every size at once.
+// Running it twice would double-apply, so it's meant to be used once per load.
+function fixSleeveAcrossSizes() {
+  if (!lastParsedSizes) return;
+  for (const m of Object.values(lastParsedSizes)) {
+    if (!('sleeve' in m) || !('shoulder' in m)) continue;
+    m.sleeve_length = m.sleeve;
+    m.sleeve = m.shoulder / 2 + m.sleeve_length;
+  }
+  outputPre.textContent = tableMode ? toOutputTable(lastParsedSizes, lastParsedType) : toOutputJSON(lastParsedSizes, lastParsedType);
+  saveState();
+  flashFixSleeveBtn('Fixed!');
+}
+
+fixSleeveBtn.addEventListener('click', fixSleeveAcrossSizes);
+
+function flashFixHemBtn(label) {
+  fixHemBtn.textContent = label;
+  setTimeout(() => { fixHemBtn.textContent = 'Half hem'; }, 1500);
+}
+
+// One-shot bulk correction for data loaded from the page where "hem" was
+// entered as a full circumference instead of a flat (half) measurement,
+// across every size at once. Keeps the original under hem_round, same
+// convention the "Take half" toggle uses for this field during parsing.
+// Running it twice would double-halve, so it's meant to be used once per load.
+function fixHemAcrossSizes() {
+  if (!lastParsedSizes) return;
+  for (const m of Object.values(lastParsedSizes)) {
+    if (!('hem' in m)) continue;
+    m.hem_round = m.hem;
+    m.hem = m.hem / 2;
+  }
+  outputPre.textContent = tableMode ? toOutputTable(lastParsedSizes, lastParsedType) : toOutputJSON(lastParsedSizes, lastParsedType);
+  saveState();
+  flashFixHemBtn('Fixed!');
+}
+
+fixHemBtn.addEventListener('click', fixHemAcrossSizes);
+
+// One-shot bulk correction for data loaded from the page where a field was
+// already (incorrectly) halved — undoes it across every size at once, and
+// drops {field}_round since it recorded that wrong halving and no longer
+// applies once the field is back to its full value. Running it twice would
+// double the value again, so it's meant to be used once per load. Shared by
+// the hip/thigh/waist "Double ___" buttons below.
+function makeDoubleFieldFix(field, btn, defaultLabel) {
+  const flash = (label) => {
+    btn.textContent = label;
+    setTimeout(() => { btn.textContent = defaultLabel; }, 1500);
+  };
+  return () => {
+    if (!lastParsedSizes) return;
+    for (const m of Object.values(lastParsedSizes)) {
+      if (!(field in m)) continue;
+      m[field] = m[field] * 2;
+      delete m[`${field}_round`];
+    }
+    outputPre.textContent = tableMode ? toOutputTable(lastParsedSizes, lastParsedType) : toOutputJSON(lastParsedSizes, lastParsedType);
+    saveState();
+    flash('Fixed!');
+  };
+}
+
+fixHipBtn.addEventListener('click', makeDoubleFieldFix('hip', fixHipBtn, 'Double hip'));
+fixThighBtn.addEventListener('click', makeDoubleFieldFix('thigh', fixThighBtn, 'Double thigh'));
+fixWaistBtn.addEventListener('click', makeDoubleFieldFix('waist', fixWaistBtn, 'Double waist'));
+
+// Runs inside the active tab's page — same self-contained constraint as
+// fillJsonEditorInPage below (they share the click/wait/isEditable helpers,
+// duplicated rather than shared since each is serialized independently by
+// chrome.scripting.executeScript). Reads the page's EXISTING sizes/type back
+// into the popup so they can be corrected via the Edit button without first
+// needing raw measurement text to paste and parse.
+async function extractSizesFromPage() {
+  const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+  const simulateClick = (el) => {
+    const opts = { bubbles: true, cancelable: true, view: window };
+    el.dispatchEvent(new MouseEvent('mousedown', opts));
+    el.dispatchEvent(new MouseEvent('mouseup', opts));
+    el.dispatchEvent(new MouseEvent('click', opts));
+  };
+  const isEditable = el => el && el.isContentEditable;
+
+  let editor = document.getElementById('json-display');
+  if (!isEditable(editor)) {
+    const editBtn = document.getElementById('edit-json');
+    if (editBtn) simulateClick(editBtn);
+    for (let i = 0; i < 30 && !isEditable(editor); i++) {
+      await wait(100);
+      editor = document.getElementById('json-display');
+    }
+  }
+  if (!editor) return { ok: false, reason: 'not-found' };
+
+  let existing;
+  try {
+    existing = JSON.parse(editor.textContent);
+  } catch (e) {
+    return { ok: false, reason: 'parse-error', message: e.message };
+  }
+
+  if (!existing.sizes || Object.keys(existing.sizes).length === 0) {
+    return { ok: false, reason: 'no-sizes' };
+  }
+  return { ok: true, sizes: existing.sizes, type: existing.type ?? null };
+}
+
 // Runs inside the active tab's page (via chrome.scripting.executeScript), not
 // in the popup's context — must be self-contained, no closures over popup.js.
 // Merges { sizes, type } into the page's EXISTING product JSON rather than
@@ -3077,7 +3330,9 @@ copyBtn.addEventListener('click', copyOutputToClipboard);
 // in the same session) fills name/product_image/brand/gender ONLY where the
 // admin tool's own value is still empty — never overwrites one someone
 // already corrected by hand, unlike sizes/type above which always win.
-async function fillJsonEditorInPage(sizes, type, pageInfo) {
+// leggingsMode (the "Leggings" toggle) forces attributes.pants_style to
+// "leggings" when true — an explicit, deliberate override, unlike pageInfo.
+async function fillJsonEditorInPage(sizes, type, pageInfo, leggingsMode) {
   const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
   const simulateClick = (el) => {
     const opts = { bubbles: true, cancelable: true, view: window };
@@ -3115,11 +3370,21 @@ async function fillJsonEditorInPage(sizes, type, pageInfo) {
       if (!existing[key] && pageInfo[key]) existing[key] = pageInfo[key];
     }
   }
+  if (leggingsMode) {
+    existing.attributes = existing.attributes || {};
+    existing.attributes.pants_style = 'leggings';
+  }
   // additional_info holds a derived (e.g. x10-scaled) copy of sizes/type that the
   // page regenerates itself once Update is clicked — clear it out rather than
   // trying to recompute it here, so it doesn't go stale against the new sizes.
   if (existing.additional_info && Object.keys(existing.additional_info).length > 0) {
     existing.additional_info = {};
+  }
+  // pixyle holds detected attributes (category, fit, pattern, etc.) inferred
+  // from the product image, unrelated to the sizes/type we're sending — clear
+  // it the same way so a stale detection from before this edit doesn't linger.
+  if (existing.pixyle && Object.keys(existing.pixyle).length > 0) {
+    existing.pixyle = {};
   }
 
   editor.focus();
@@ -3152,7 +3417,7 @@ sendBtn.addEventListener('click', async () => {
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func: fillJsonEditorInPage,
-      args: [lastParsedSizes, lastParsedType, lastPageInfo],
+      args: [lastParsedSizes, lastParsedType, lastPageInfo, leggingsMode],
     });
     if (result && result.ok) {
       if (result.updated) {
@@ -3175,6 +3440,46 @@ sendBtn.addEventListener('click', async () => {
     console.error('Send to page failed:', e);
     flashSendBtn('Failed');
     showError(`Send to page failed: ${e.message}`);
+  }
+});
+
+function flashLoadFromPageBtn(label) {
+  loadFromPageBtn.textContent = label;
+  setTimeout(() => { loadFromPageBtn.textContent = 'Load sizes from page'; }, 1500);
+}
+
+loadFromPageBtn.addEventListener('click', async () => {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: extractSizesFromPage,
+    });
+    if (result && result.ok) {
+      lastParsedSizes = result.sizes;
+      lastParsedType = result.type && TYPE_CONFIG[result.type] ? result.type : typeSelect.value;
+      typeSelect.value = lastParsedType;
+      tableMode = false;
+      tableBtn.classList.remove('active');
+      outputPre.textContent = toOutputJSON(lastParsedSizes, lastParsedType);
+      outputSection.classList.remove('hidden');
+      errorMsg.classList.add('hidden');
+      flashLoadFromPageBtn('Loaded!');
+      saveState();
+    } else if (result && result.reason === 'no-sizes') {
+      flashLoadFromPageBtn('No sizes on page');
+      showError('The page\'s JSON has no sizes to load yet.');
+    } else if (result && result.reason === 'parse-error') {
+      flashLoadFromPageBtn('Bad page JSON');
+      showError(`The page's existing JSON didn't parse: ${result.message}`);
+    } else {
+      flashLoadFromPageBtn('Field not found');
+      showError('Could not find #json-display or #edit-json on this page.');
+    }
+  } catch (e) {
+    console.error('Load from page failed:', e);
+    flashLoadFromPageBtn('Failed');
+    showError(`Load from page failed: ${e.message}`);
   }
 });
 
@@ -3397,6 +3702,7 @@ function saveState() {
       sleeveAsArm,
       tableMode,
       kidsMode,
+      leggingsMode,
       lastParsedSizes,
       lastParsedType,
       lastPageInfo,
@@ -3427,6 +3733,9 @@ async function restoreState() {
 
   kidsMode = !!s.kidsMode;
   kidsBtn.classList.toggle('active', kidsMode);
+
+  leggingsMode = !!s.leggingsMode;
+  leggingsBtn.classList.toggle('active', leggingsMode);
 
   lastParsedSizes = s.lastParsedSizes ?? null;
   lastParsedType = s.lastParsedType ?? null;

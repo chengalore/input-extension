@@ -145,6 +145,24 @@ textarea::placeholder {
   background: #6d28d9;
 }
 
+.secondary-btn {
+  background: #1e1e3a;
+  color: #a78bfa;
+  border: 1px solid #2d2d4e;
+  border-radius: 6px;
+  padding: 6px 0;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  width: 100%;
+}
+
+.secondary-btn:hover {
+  background: #7c3aed;
+  color: #fff;
+}
+
 .divider {
   border: none;
   border-top: 1px solid #2d2d4e;
@@ -178,6 +196,21 @@ textarea::placeholder {
   font-weight: 600;
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
+}
+
+.fix-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 5px;
+  margin-top: 4px;
+}
+
+.fix-actions .copy-btn {
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .copy-btn:hover {
