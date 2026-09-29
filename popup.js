@@ -326,6 +326,32 @@ function applyKidsMock(sizes, type) {
   return [];
 }
 
+// Pants/shorts sheets sometimes list waist/rise/inseam/hip but never thigh at
+// all (e.g. a "circumference" row whose own field name got lost, or a sheet
+// that just doesn't cover it). Rather than reporting thigh as missing,
+// estimate it from hip — thigh circumference runs roughly 60% of hip on a
+// straight/regular fit — and record it under predicted_thigh alongside
+// thigh itself, so it's visibly flagged as an estimate rather than a real
+// measurement. Only fills sizes that have hip but not thigh; anything still
+// missing thigh (no hip to estimate from) is left for the normal missing-
+// field error below to catch.
+const THIGH_MOCK_RATIO = 0.6;
+function applyThighMock(sizes, type) {
+  for (const measurements of Object.values(sizes)) {
+    if (!('thigh' in measurements) && 'hip' in measurements) {
+      const predicted = Math.round(measurements.hip * THIGH_MOCK_RATIO * 10) / 10;
+      measurements.predicted_thigh = predicted;
+      measurements.thigh = predicted;
+    }
+  }
+  const errors = [];
+  for (const [label, measurements] of Object.entries(sizes)) {
+    const missing = TYPE_CONFIG[type].required.filter(k => !(k in measurements));
+    if (missing.length) errors.push(`"${label}" is missing required fields: ${missing.join(', ')}`);
+  }
+  return errors;
+}
+
 // ─── TSV parser (handles quoted multi-line cells) ────────────────────────────
 // When copying from Excel/Sheets, cells with newlines are wrapped in quotes.
 // This parser keeps only the first line of each quoted multi-line cell,
@@ -2996,7 +3022,49 @@ function tryParseInlineSizeStream(rawText, type, takeHalf) {
   return { sizes, errors };
 }
 
+// Pasting actual JSON — e.g. a "sizes" fragment copied out of this tool's own
+// output, or the admin page's full product JSON — into the plain-text input
+// box used to fall through to the text-based parsers below, which have no
+// notion of braces/colons-as-JSON and mangled it (a size label could end up
+// as something like "M (38): {" with most fields lost). Sizes pasted this
+// way are already in this tool's own canonical shape (numeric fields, no
+// unit strings), so they're used as-is — no normalizeMeasurements/
+// computeSleeve reprocessing, just the same missing-required-fields check
+// every other parser ends with.
+function tryParseJsonSizesInput(rawText, type) {
+  const trimmed = rawText.trim();
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('"')) return null;
+
+  let parsed;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch (e) {
+    // Not a full JSON object — try as a stripped-braces fragment, the shape
+    // toOutputJSON produces for pasting back in: `"sizes": {...},\n"type": "..."`.
+    try {
+      parsed = JSON.parse(`{${trimmed}}`);
+    } catch (e2) {
+      return null;
+    }
+  }
+
+  if (!parsed || typeof parsed !== 'object' || !parsed.sizes || typeof parsed.sizes !== 'object') return null;
+
+  const sizes = parsed.sizes;
+  const errors = [];
+  for (const [label, measurements] of Object.entries(sizes)) {
+    if (!measurements || typeof measurements !== 'object') continue;
+    const missing = TYPE_CONFIG[type].required.filter(k => !(k in measurements));
+    if (missing.length) errors.push(`"${label}" is missing required fields: ${missing.join(', ')}`);
+  }
+
+  if (Object.keys(sizes).length === 0) return null;
+  return { sizes, errors };
+}
+
 function parseInternal(rawText, type, takeHalf) {
+  const jsonSizesResult = tryParseJsonSizesInput(rawText, type);
+  if (jsonSizesResult) return jsonSizesResult;
   if (isHtmlTableFormat(rawText)) rawText = convertHtmlTable(rawText);
   if (isMarkdownTableFormat(rawText)) rawText = convertMarkdownTable(rawText);
   const inlineSizeStreamResult = tryParseInlineSizeStream(rawText, type, takeHalf);
@@ -3060,8 +3128,10 @@ const sleeveBtn = document.getElementById('sleeve-btn');
 const tableBtn  = document.getElementById('table-btn');
 const kidsBtn   = document.getElementById('kids-btn');
 const leggingsBtn = document.getElementById('leggings-btn');
+const mockThighBtn = document.getElementById('mock-thigh-btn');
 const copyBtn   = document.getElementById('copy-btn');
 const fixSleeveBtn = document.getElementById('fix-sleeve-btn');
+const fixSleeveLengthBtn = document.getElementById('fix-sleeve-length-btn');
 const fixHemBtn = document.getElementById('fix-hem-btn');
 const fixHipBtn = document.getElementById('fix-hip-btn');
 const fixThighBtn = document.getElementById('fix-thigh-btn');
@@ -3135,6 +3205,13 @@ leggingsBtn.addEventListener('click', () => {
   saveState();
 });
 
+let thighMockMode = false;
+mockThighBtn.addEventListener('click', () => {
+  thighMockMode = !thighMockMode;
+  mockThighBtn.classList.toggle('active', thighMockMode);
+  saveState();
+});
+
 let lastParsedSizes = null;
 let lastParsedType = null;
 // Captured by "Get info from page" (on the live product page tab) and later
@@ -3162,7 +3239,11 @@ function runParse() {
   // fake placeholder so the item can be entered as a real type (e.g. tShirt)
   // even though a kids chart never supplies everything that type requires.
   // Only applies when the toggle is on — a regular parse is untouched.
-  const errors = kidsMode ? applyKidsMock(sizes, type) : parseErrors;
+  let errors = kidsMode ? applyKidsMock(sizes, type) : parseErrors;
+  // Mock thigh toggle: pants/shorts only, estimates thigh from hip when it's
+  // missing (see applyThighMock). Runs after Kids so it's a no-op wherever
+  // Kids already backfilled thigh itself.
+  if (thighMockMode && PANTS_TYPES.has(type)) errors = applyThighMock(sizes, type);
 
   if (Object.keys(sizes).length === 0) {
     showError(errors.length ? errors.join('\n') : 'No measurements found. Check the format.');
@@ -3229,6 +3310,30 @@ function fixSleeveAcrossSizes() {
 }
 
 fixSleeveBtn.addEventListener('click', fixSleeveAcrossSizes);
+
+function flashFixSleeveLengthBtn(label) {
+  fixSleeveLengthBtn.textContent = label;
+  setTimeout(() => { fixSleeveLengthBtn.textContent = 'sleeve_length → sleeve'; }, 1500);
+}
+
+// Mirror of the fix above: for data loaded from the page where "sleeve_length"
+// itself already holds the correct full sleeve measurement, copy it directly
+// into "sleeve" for every size (no shoulder/2 formula — sleeve_length is
+// already treated as complete here, unlike the other direction). Safe to run
+// more than once — copying sleeve_length into sleeve doesn't change
+// sleeve_length itself, so repeating it is a no-op.
+function fixSleeveLengthAcrossSizes() {
+  if (!lastParsedSizes) return;
+  for (const m of Object.values(lastParsedSizes)) {
+    if (!('sleeve_length' in m)) continue;
+    m.sleeve = m.sleeve_length;
+  }
+  outputPre.textContent = tableMode ? toOutputTable(lastParsedSizes, lastParsedType) : toOutputJSON(lastParsedSizes, lastParsedType);
+  saveState();
+  flashFixSleeveLengthBtn('Fixed!');
+}
+
+fixSleeveLengthBtn.addEventListener('click', fixSleeveLengthAcrossSizes);
 
 function flashFixHemBtn(label) {
   fixHemBtn.textContent = label;
@@ -3703,6 +3808,7 @@ function saveState() {
       tableMode,
       kidsMode,
       leggingsMode,
+      thighMockMode,
       lastParsedSizes,
       lastParsedType,
       lastPageInfo,
@@ -3736,6 +3842,9 @@ async function restoreState() {
 
   leggingsMode = !!s.leggingsMode;
   leggingsBtn.classList.toggle('active', leggingsMode);
+
+  thighMockMode = !!s.thighMockMode;
+  mockThighBtn.classList.toggle('active', thighMockMode);
 
   lastParsedSizes = s.lastParsedSizes ?? null;
   lastParsedType = s.lastParsedType ?? null;
