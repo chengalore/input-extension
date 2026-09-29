@@ -47,6 +47,7 @@
       <button id="kids-btn" class="toggle-btn" title="Mock missing required fields">Kids</button>
       <button id="leggings-btn" class="toggle-btn" title="Send to page also sets attributes.pants_style = &quot;leggings&quot;">Leggings</button>
       <button id="mock-thigh-btn" class="toggle-btn" title="Pants/shorts only: if thigh is missing but hip is present, set predicted_thigh = thigh = hip × 0.6">Mock thigh</button>
+      <button id="mock-hip-btn" class="toggle-btn" title="Pants/shorts only: if hip is missing but waist is present, set predicted_hip = hip = waist × 1.35">Mock hip</button>
     </div>
 
     <button id="parse-btn">Parse</button>
@@ -62,7 +63,7 @@
       </div>
       <div class="fix-actions">
         <button id="fix-sleeve-btn" class="copy-btn" title="For every size: sleeve_length = current sleeve, then sleeve = shoulder/2 + sleeve_length">sleeve → sleeve_length</button>
-        <button id="fix-sleeve-length-btn" class="copy-btn" title="For every size: sleeve = current sleeve_length">sleeve_length → sleeve</button>
+        <button id="fix-sleeve-length-btn" class="copy-btn" title="For every size: sleeve = current sleeve_length, then sleeve_length is removed">sleeve_length → sleeve</button>
         <button id="fix-hem-btn" class="copy-btn" title="For every size: hem = hem / 2 (original kept as hem_round)">Half hem</button>
         <button id="fix-hip-btn" class="copy-btn" title="For every size: hip = hip × 2 (undoes an incorrect halving), and removes the now-stale hip_round">Double hip</button>
         <button id="fix-thigh-btn" class="copy-btn" title="For every size: thigh = thigh × 2 (undoes an incorrect halving), and removes the now-stale thigh_round">Double thigh</button>

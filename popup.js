@@ -231,6 +231,11 @@ const PANTS_COLUMN_MAP = {
   'crossing':          'thigh',
   'crossing width':    'thigh',
   'around the thigh':  'thigh',
+  // A bare "circumference" with no qualifying word — some vendor sheets
+  // (e.g. UNITED ARROWS) list it between Inseam and Hip rows and just mean
+  // thigh circumference; a qualified reading like "waist circumference" or
+  // "hip circumference" is still its own more specific key above and wins.
+  'circumference':     'thigh',
   'inseam':            'inseam',
   'crotch length':     'inseam',
   'lower length':      'inseam',
@@ -342,6 +347,29 @@ function applyThighMock(sizes, type) {
       const predicted = Math.round(measurements.hip * THIGH_MOCK_RATIO * 10) / 10;
       measurements.predicted_thigh = predicted;
       measurements.thigh = predicted;
+    }
+  }
+  const errors = [];
+  for (const [label, measurements] of Object.entries(sizes)) {
+    const missing = TYPE_CONFIG[type].required.filter(k => !(k in measurements));
+    if (missing.length) errors.push(`"${label}" is missing required fields: ${missing.join(', ')}`);
+  }
+  return errors;
+}
+
+// Same idea as applyThighMock, one level up the chain: some sheets give
+// waist/inseam/rise but never hip at all. Estimated from waist — hip runs
+// roughly 1.35x waist on typical pants grading (matching the ratio in an
+// actual waist/hip pair seen this session: 73→99, 75→101 ≈ 1.35x). Meant to
+// run before applyThighMock in runParse, so a freshly mocked hip can in turn
+// feed a mocked thigh when both are missing from the same sheet.
+const HIP_MOCK_RATIO = 1.35;
+function applyHipMock(sizes, type) {
+  for (const measurements of Object.values(sizes)) {
+    if (!('hip' in measurements) && 'waist' in measurements) {
+      const predicted = Math.round(measurements.waist * HIP_MOCK_RATIO * 10) / 10;
+      measurements.predicted_hip = predicted;
+      measurements.hip = predicted;
     }
   }
   const errors = [];
@@ -3129,6 +3157,7 @@ const tableBtn  = document.getElementById('table-btn');
 const kidsBtn   = document.getElementById('kids-btn');
 const leggingsBtn = document.getElementById('leggings-btn');
 const mockThighBtn = document.getElementById('mock-thigh-btn');
+const mockHipBtn = document.getElementById('mock-hip-btn');
 const copyBtn   = document.getElementById('copy-btn');
 const fixSleeveBtn = document.getElementById('fix-sleeve-btn');
 const fixSleeveLengthBtn = document.getElementById('fix-sleeve-length-btn');
@@ -3212,6 +3241,13 @@ mockThighBtn.addEventListener('click', () => {
   saveState();
 });
 
+let hipMockMode = false;
+mockHipBtn.addEventListener('click', () => {
+  hipMockMode = !hipMockMode;
+  mockHipBtn.classList.toggle('active', hipMockMode);
+  saveState();
+});
+
 let lastParsedSizes = null;
 let lastParsedType = null;
 // Captured by "Get info from page" (on the live product page tab) and later
@@ -3240,6 +3276,10 @@ function runParse() {
   // even though a kids chart never supplies everything that type requires.
   // Only applies when the toggle is on — a regular parse is untouched.
   let errors = kidsMode ? applyKidsMock(sizes, type) : parseErrors;
+  // Mock hip toggle: pants/shorts only, estimates hip from waist when it's
+  // missing (see applyHipMock). Runs BEFORE Mock thigh so a freshly mocked
+  // hip can feed a mocked thigh in turn, when a sheet is missing both.
+  if (hipMockMode && PANTS_TYPES.has(type)) errors = applyHipMock(sizes, type);
   // Mock thigh toggle: pants/shorts only, estimates thigh from hip when it's
   // missing (see applyThighMock). Runs after Kids so it's a no-op wherever
   // Kids already backfilled thigh itself.
@@ -3319,14 +3359,17 @@ function flashFixSleeveLengthBtn(label) {
 // Mirror of the fix above: for data loaded from the page where "sleeve_length"
 // itself already holds the correct full sleeve measurement, copy it directly
 // into "sleeve" for every size (no shoulder/2 formula — sleeve_length is
-// already treated as complete here, unlike the other direction). Safe to run
-// more than once — copying sleeve_length into sleeve doesn't change
-// sleeve_length itself, so repeating it is a no-op.
+// already treated as complete here, unlike the other direction), then drop
+// sleeve_length — once copied it's redundant, and leaving it in place reads
+// as if it's still a distinct, separately-meaningful measurement. Running it
+// again is still harmless: with sleeve_length already gone, the loop body
+// just skips every size.
 function fixSleeveLengthAcrossSizes() {
   if (!lastParsedSizes) return;
   for (const m of Object.values(lastParsedSizes)) {
     if (!('sleeve_length' in m)) continue;
     m.sleeve = m.sleeve_length;
+    delete m.sleeve_length;
   }
   outputPre.textContent = tableMode ? toOutputTable(lastParsedSizes, lastParsedType) : toOutputJSON(lastParsedSizes, lastParsedType);
   saveState();
@@ -3809,6 +3852,7 @@ function saveState() {
       kidsMode,
       leggingsMode,
       thighMockMode,
+      hipMockMode,
       lastParsedSizes,
       lastParsedType,
       lastPageInfo,
@@ -3845,6 +3889,9 @@ async function restoreState() {
 
   thighMockMode = !!s.thighMockMode;
   mockThighBtn.classList.toggle('active', thighMockMode);
+
+  hipMockMode = !!s.hipMockMode;
+  mockHipBtn.classList.toggle('active', hipMockMode);
 
   lastParsedSizes = s.lastParsedSizes ?? null;
   lastParsedType = s.lastParsedType ?? null;
