@@ -131,6 +131,9 @@ const TOPS_COLUMN_MAP = {
   'total':            'height',
   'total length':     'height',
   'back length':      'height',
+  'length at back':   'height',
+  'length from back': 'height',
+  'center length':    'height',
   'body length':      'height',
   'clothes length':   'height',
   'garment length':   'height',
@@ -2762,7 +2765,14 @@ function parseBlockFormat(rawText, type, takeHalf) {
     if (!currentSize) continue;
     if (!allSections[currentSection]) allSections[currentSection] = {};
 
-    for (const part of line.split(',').map(s => s.trim()).filter(Boolean)) {
+    // "/" also separates two distinct "Field: value" pairs on one line (e.g.
+    // "Length from back: 96cm / Width: 37cm") — a comma-only split reads the
+    // whole thing as a single part, so parseFieldStr's own single-colon match
+    // only ever finds the FIRST field and silently drops everything after it.
+    // (A single field's own "num1/num2" pair, e.g. "Length: 60cm/64cm", is
+    // already collapsed to just the second number before this loop runs, so
+    // splitting on "/" here doesn't sever that case.)
+    for (const part of line.split(/[,、/]/).map(s => s.trim()).filter(Boolean)) {
       const parsed = parseFieldStr(part);
       if (parsed) {
         const [k, v] = parsed;
@@ -3172,6 +3182,7 @@ const typeSelect = document.getElementById('type-select');
 const outputSection = document.getElementById('output-section');
 const outputPre = document.getElementById('output');
 const errorMsg = document.getElementById('error-msg');
+const shoeTopviewInput = document.getElementById('shoe-topview-input');
 const pageInfoBtn = document.getElementById('page-info-btn');
 const pageInfoSection = document.getElementById('page-info-section');
 const pageInfoOutput = document.getElementById('page-info-output');
@@ -3193,6 +3204,11 @@ function applyYukiToggle(value) {
   TOPS_COLUMN_MAP['yukitake'] = yukiAsSleeve ? 'sleeve' : 'sleeve_length';
   TOPS_COLUMN_MAP['ゆき']    = yukiAsSleeve ? 'sleeve' : 'sleeve_length';
   TOPS_COLUMN_MAP['ゆき丈']  = yukiAsSleeve ? 'sleeve' : 'sleeve_length';
+  // "Snow length" — a machine-translation trap: 裄(丈) (yuki, this same
+  // shoulder-to-cuff measurement) and 雪 (yuki, "snow") share a pronunciation
+  // but are different kanji; poor translation/OCR renders the rare tailoring
+  // term as its far more common homophone.
+  TOPS_COLUMN_MAP['snow length'] = yukiAsSleeve ? 'sleeve' : 'sleeve_length';
 }
 yukiBtn.addEventListener('click', () => {
   applyYukiToggle(!yukiAsSleeve);
@@ -3311,6 +3327,12 @@ let saveInputTimer = null;
 inputText.addEventListener('input', () => {
   clearTimeout(saveInputTimer);
   saveInputTimer = setTimeout(saveState, 300);
+});
+
+let saveShoeTopviewTimer = null;
+shoeTopviewInput.addEventListener('input', () => {
+  clearTimeout(saveShoeTopviewTimer);
+  saveShoeTopviewTimer = setTimeout(saveState, 300);
 });
 
 function copyOutputToClipboard() {
@@ -3480,7 +3502,10 @@ async function extractSizesFromPage() {
 // already corrected by hand, unlike sizes/type above which always win.
 // leggingsMode (the "Leggings" toggle) forces attributes.pants_style to
 // "leggings" when true — an explicit, deliberate override, unlike pageInfo.
-async function fillJsonEditorInPage(sizes, type, pageInfo, leggingsMode) {
+// shoeTopviewImg (from the "Shoe top-view image URL" field) is set into
+// additional_info.shoe_topview_img AFTER the additional_info wipe below, so
+// it survives that reset instead of being cleared along with everything else.
+async function fillJsonEditorInPage(sizes, type, pageInfo, leggingsMode, shoeTopviewImg) {
   const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
   const simulateClick = (el) => {
     const opts = { bubbles: true, cancelable: true, view: window };
@@ -3528,6 +3553,10 @@ async function fillJsonEditorInPage(sizes, type, pageInfo, leggingsMode) {
   if (existing.additional_info && Object.keys(existing.additional_info).length > 0) {
     existing.additional_info = {};
   }
+  if (shoeTopviewImg) {
+    existing.additional_info = existing.additional_info || {};
+    existing.additional_info.shoe_topview_img = [shoeTopviewImg];
+  }
   // pixyle holds detected attributes (category, fit, pattern, etc.) inferred
   // from the product image, unrelated to the sizes/type we're sending — clear
   // it the same way so a stale detection from before this edit doesn't linger.
@@ -3565,7 +3594,7 @@ sendBtn.addEventListener('click', async () => {
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func: fillJsonEditorInPage,
-      args: [lastParsedSizes, lastParsedType, lastPageInfo, leggingsMode],
+      args: [lastParsedSizes, lastParsedType, lastPageInfo, leggingsMode, shoeTopviewInput.value.trim() || null],
     });
     if (result && result.ok) {
       if (result.updated) {
@@ -3844,6 +3873,7 @@ function saveState() {
   chrome.storage.local.set({
     [STORAGE_KEY]: {
       inputText: inputText.value,
+      shoeTopviewImg: shoeTopviewInput.value,
       type: typeSelect.value,
       takeHalf,
       yukiAsSleeve,
@@ -3870,6 +3900,7 @@ async function restoreState() {
   if (!s) return;
 
   if (s.inputText) inputText.value = s.inputText;
+  if (s.shoeTopviewImg) shoeTopviewInput.value = s.shoeTopviewImg;
   if (s.type) typeSelect.value = s.type;
 
   takeHalf = !!s.takeHalf;

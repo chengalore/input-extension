@@ -55,7 +55,8 @@ label {
 }
 
 select,
-textarea {
+textarea,
+input[type="text"] {
   background: #0f0f1a;
   border: 1px solid #2d2d4e;
   border-radius: 6px;
@@ -67,7 +68,8 @@ textarea {
 }
 
 select:focus,
-textarea:focus {
+textarea:focus,
+input[type="text"]:focus {
   border-color: #7c3aed;
 }
 
@@ -85,7 +87,13 @@ textarea {
   line-height: 1.4;
 }
 
-textarea::placeholder {
+input[type="text"] {
+  padding: 5px 8px;
+  width: 100%;
+}
+
+textarea::placeholder,
+input[type="text"]::placeholder {
   color: #4b5563;
 }
 
