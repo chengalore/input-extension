@@ -11,6 +11,10 @@ const TYPE_CONFIG = {
     required: ['height', 'width'],
     optional: ['depth'],
   },
+  shoe: {
+    required: ['height', 'width'],
+    optional: [],
+  },
   shirt: {
     required: ['height', 'bust'],
     optional: ['shoulder', 'sleeve_length', 'sleeve', 'waist', 'hem', 'bicep'],
@@ -67,7 +71,7 @@ const TYPE_CONFIG = {
 
 const TOPS_TYPES  = new Set(['shirt', 'tShirt', 'jacket', 'coat', 'dress', 'dressALine', 'dressSleeve', 'tunicSleeve', 'sweater', 'top', 'skirt']);
 const PANTS_TYPES = new Set(['pants', 'shorts']);
-const BAG_TYPES   = new Set(['bag', 'wallet']);
+const BAG_TYPES   = new Set(['bag', 'wallet', 'shoe']);
 
 // Column header (lowercase) → output field name, for bags
 const BAG_COLUMN_MAP = {
@@ -152,6 +156,8 @@ const TOPS_COLUMN_MAP = {
   'yukitake':             'sleeve_length',
   'ゆき':                 'sleeve_length',
   'ゆき丈':              'sleeve_length',
+  '裄丈':                'sleeve_length',
+  '裄':                   'sleeve_length',
   'sleeve':               'sleeve',
   'raglan sleeve':        '_raglanSleeve',
   'raglan sleeve length': '_raglanSleeve',
@@ -177,6 +183,7 @@ const TOPS_COLUMN_MAP = {
   '身幅':   'bust',
   '胸囲':   'bust',
   '袖丈':  'sleeve_length',
+  'そで丈': 'sleeve_length',
   '着丈':  'height',
   '身丈':  'height',
   '総丈':  'height',
@@ -240,6 +247,7 @@ const PANTS_COLUMN_MAP = {
   // "hip circumference" is still its own more specific key above and wins.
   'circumference':     'thigh',
   'inseam':            'inseam',
+  'inner seam':        'inseam',
   'crotch length':     'inseam',
   'lower length':      'inseam',
   'also, the lower length': 'inseam',
@@ -1520,12 +1528,18 @@ function splitLine(line) {
 // largest value as height instead, and the remaining two by descending size
 // for width/depth — e.g. "42cm x 2cm x 34cm" → height 42, width 34, depth 2
 // (not height 2, which the plain positional read would give).
+// Otherwise (no implausibly-thin outlier), width is taken as the larger of
+// the two non-depth values and height the smaller — e.g. "11 x 26 x 8 cm" →
+// width 26, height 11, depth 8, not width 11/height 26 from reading the
+// numbers in that literal order, since a bag described this way (most
+// clutches/flat bags) tends to be wider than it is tall.
 function assignBagTriple(v1, v2, v3) {
   const minOther = Math.min(v1, v3);
   if (v2 < minOther / 2 && v2 !== Math.max(v1, v2, v3)) {
     const [height, width, depth] = [v1, v2, v3].sort((a, b) => b - a);
     return { width, height, depth };
   }
+  if (v2 > v1) return { width: v2, height: v1, depth: v3 };
   return { width: v1, height: v2, depth: v3 };
 }
 
@@ -1729,6 +1743,18 @@ function parseSegment(segment, type) {
     const letterDims = [...segment.matchAll(/(\d+\.?\d*)\s*cm\s+([HWLDhwld])\b/g)];
     if (letterDims.length > 0) {
       for (const [, num, letter] of letterDims) {
+        const field = LETTER_MAP[letter.toLowerCase()];
+        if (field && !(field in result)) result[field] = parseFloat(num);
+      }
+      return result;
+    }
+    // "{num}cm({letter})" — e.g. "15.9cm(H) x 36.8cm(L) x 8.9cm(D)". Same
+    // trailing-letter idea as letterDims above, but the letter sits directly
+    // inside parens right after "cm" with no space, so that pattern's
+    // required \s+ doesn't match it.
+    const letterParenSuffixDims = [...segment.matchAll(/(\d+\.?\d*)\s*cm\s*[(（]([HWLDhwld])[)）]/g)];
+    if (letterParenSuffixDims.length > 0) {
+      for (const [, num, letter] of letterParenSuffixDims) {
         const field = LETTER_MAP[letter.toLowerCase()];
         if (field && !(field in result)) result[field] = parseFloat(num);
       }
@@ -3204,6 +3230,8 @@ function applyYukiToggle(value) {
   TOPS_COLUMN_MAP['yukitake'] = yukiAsSleeve ? 'sleeve' : 'sleeve_length';
   TOPS_COLUMN_MAP['ゆき']    = yukiAsSleeve ? 'sleeve' : 'sleeve_length';
   TOPS_COLUMN_MAP['ゆき丈']  = yukiAsSleeve ? 'sleeve' : 'sleeve_length';
+  TOPS_COLUMN_MAP['裄丈']    = yukiAsSleeve ? 'sleeve' : 'sleeve_length';
+  TOPS_COLUMN_MAP['裄']      = yukiAsSleeve ? 'sleeve' : 'sleeve_length';
   // "Snow length" — a machine-translation trap: 裄(丈) (yuki, this same
   // shoulder-to-cuff measurement) and 雪 (yuki, "snow") share a pronunciation
   // but are different kanji; poor translation/OCR renders the rare tailoring
@@ -3220,7 +3248,7 @@ function applySleeveToggle(value) {
   sleeveAsArm = value;
   sleeveBtn.classList.toggle('active', sleeveAsArm);
   const sleeveTarget = sleeveAsArm ? 'sleeve' : 'sleeve_length';
-  for (const key of ['sleeve length', '袖丈', '소매길이']) {
+  for (const key of ['sleeve length', '袖丈', 'そで丈', '소매길이']) {
     TOPS_COLUMN_MAP[key] = sleeveTarget;
   }
 }
@@ -3808,6 +3836,31 @@ async function extractPageInfo() {
         }
         result.size_text = container.innerText.trim();
       }
+    }
+  }
+
+  // Generic fallback for sites that bury the W x H x D dimensions as a plain
+  // bullet line inside an "Item details"/"Product details" modal instead of
+  // a dedicated size chart — e.g. bymalenebirger.com: click "ITEM DETAILS" to
+  // open it, then "- 11 x 26 x 8 cm" appears under its Description section.
+  // Case-insensitive (unlike findClickableByText above) since the visible
+  // all-caps label is often CSS text-transform over mixed-case markup, and no
+  // site-specific selector is needed — the dimension pattern is signal enough.
+  if (!result.size_text) {
+    const normalize = s => s.trim().toLowerCase();
+    const allClickable = [...document.querySelectorAll('button, a, [role="button"], [onclick], summary, div, span')];
+    const detailsCandidates = allClickable.filter(el => {
+      const t = normalize(el.textContent);
+      return t === 'item details' || t === 'product details';
+    });
+    const detailsBtn = detailsCandidates.length > 0
+      ? detailsCandidates.reduce((a, b) => (a.textContent.length <= b.textContent.length ? a : b))
+      : null;
+    if (detailsBtn) {
+      simulateClick(detailsBtn);
+      await wait(400);
+      const dimMatch = document.body.innerText.match(/[\d.]+\s*[xX×]\s*[\d.]+\s*[xX×]\s*[\d.]+\s*cm/i);
+      if (dimMatch) result.size_text = dimMatch[0];
     }
   }
 
